@@ -80,6 +80,13 @@ The following standard commands are supported:
   cycles. If the WRITE_FILE parameter is enabled, then the file
   /tmp/heattest.txt will be created with a log of all temperature
   samples taken during the test.
+- `HEATER_CALIBRATE HEATER=<config_name> TARGET=<temperature>
+  [WRITE_FILE=1]`: Detect the FOPDT parameters of a heater. The
+  specified heater will be enabled until the specified target
+  temperature is reached and then the heater will be turned off. If
+  the WRITE_FILE parameter is enabled, then the file /tmp/heattest.txt
+  will be created with a log of all temperature samples taken during
+  the test.
 - `SET_VELOCITY_LIMIT [VELOCITY=<value>] [ACCEL=<value>]
   [ACCEL_TO_DECEL=<value>] [JUNCTION_DEVIATION=<value>]`: Modify the
   printer's velocity limits. Note that one may only set values less
