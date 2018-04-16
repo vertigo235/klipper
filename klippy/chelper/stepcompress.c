@@ -537,16 +537,20 @@ init_bezier_coeffs(struct bezier *b, double start_sv, double end_sv)
 static inline double
 bezier_nm_next_x(struct bezier *b, double dist, double x)
 {
-    double f = b->a*pow(x, 6.)/6. + b->b*pow(x, 5.)/5. + b->c*pow(x, 4.)/4. + b->start_sv*x - dist;
-    double fp = b->a*pow(x, 5.) + b->b*pow(x, 4.) + b->c*pow(x, 3.) + b->start_sv;
+    double x_3 = x*x*x;
+    double x_4 = x_3*x;
+    double x_5 = x_4*x;
+    double x_6 = x_5*x;
+    double f = b->a*x_6/6. + b->b*x_5/5. + b->c*x_4/4. + b->start_sv*x - dist;
+    double fp = b->a*x_5 + b->b*x_4 + b->c*x_3 + b->start_sv;
     return x - f/fp;
 }
 
 #define NM_MAX_ITER 100
 static int32_t
-bezier_step_time(struct bezier *b, double dist, double max_err, double *ret)
+bezier_step_time(struct bezier *b, double dist, double max_err, double *x)
 {
-    double xn = 0.5;
+    double xn = *x;
     double xn1 = bezier_nm_next_x(b, dist, xn);
     int i;
     for (i = 0; fabs(xn1 - xn) > max_err && i < NM_MAX_ITER; ++i) {
@@ -557,7 +561,7 @@ bezier_step_time(struct bezier *b, double dist, double max_err, double *ret)
         errorf("bezier_step_time did not converge after %d iterations!\n", NM_MAX_ITER);
         return ERROR_RET;
     }
-    *ret = xn1;
+    *x = xn1;
     return 0;
 }
 #endif
@@ -615,11 +619,11 @@ stepcompress_push_const(
         double move_time = steps / ((start_sv + end_sv) * .5);
         struct bezier b;
         init_bezier_coeffs(&b, start_sv, end_sv);
-        struct queue_append qa = queue_append_start(sc, print_time, .5);
         double max_err = 1. / (sc->mcu_freq * move_time * 2.);
+        double t = .25;
+        struct queue_append qa = queue_append_start(sc, print_time, .5);
         for (int i = 0; i < count; ++i) {
             double scaled_dist = (i + .5 + step_offset) / move_time;
-            double t = 0.;
             int ret = bezier_step_time(&b, scaled_dist, max_err, &t);
             if (ret)
                 return ret;
