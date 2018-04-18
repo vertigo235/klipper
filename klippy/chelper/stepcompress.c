@@ -600,33 +600,37 @@ init_bezier_coeffs(struct bezier *b, double start_sv, double end_sv)
 }
 
 static inline double
-bezier_nm_next_x(struct bezier *b, double dist, double x)
+bezier_nm_next_x(struct bezier *b, double target_scaled_dist, double guess_time_r)
 {
-    double x_3 = x*x*x;
-    double x_4 = x_3*x;
-    double x_5 = x_4*x;
-    double x_6 = x_5*x;
-    double f = b->a*x_6/6. + b->b*x_5/5. + b->c*x_4/4. + b->start_sv*x - dist;
-    double fp = b->a*x_5 + b->b*x_4 + b->c*x_3 + b->start_sv;
-    return x - f/fp;
+    double guess_time_r3 = guess_time_r*guess_time_r*guess_time_r;
+    double guess_time_r4 = guess_time_r3*guess_time_r;
+    double guess_time_r5 = guess_time_r4*guess_time_r;
+    double guess_time_r6 = guess_time_r5*guess_time_r;
+    double guessed_scaled_dist = (b->a*guess_time_r6/6. + b->b*guess_time_r5/5.
+                                  + b->c*guess_time_r4/4.
+                                  + b->start_sv*guess_time_r);
+    double err = guessed_scaled_dist - target_scaled_dist;
+    double guessed_velocity = (b->a*guess_time_r5 + b->b*guess_time_r4
+                               + b->c*guess_time_r3 + b->start_sv);
+    return guess_time_r - err/guessed_velocity;
 }
 
 #define NM_MAX_ITER 100
 static int32_t
-bezier_step_time(struct bezier *b, double dist, double max_err, double *x)
+bezier_step_time(struct bezier *b, double target, double max_err, double *ptime_r)
 {
-    double xn = *x;
-    double xn1 = bezier_nm_next_x(b, dist, xn);
+    double last_guess = *ptime_r;
+    double guess = bezier_nm_next_x(b, target, last_guess);
     int i;
-    for (i = 0; fabs(xn1 - xn) > max_err && i < NM_MAX_ITER; ++i) {
-        xn = xn1;
-        xn1 = bezier_nm_next_x(b, dist, xn);
+    for (i = 0; fabs(last_guess - guess) > max_err && i < NM_MAX_ITER; ++i) {
+        last_guess = guess;
+        guess = bezier_nm_next_x(b, target, last_guess);
     }
     if (i == NM_MAX_ITER) {
         errorf("bezier_step_time did not converge after %d iterations!\n", NM_MAX_ITER);
         return ERROR_RET;
     }
-    *x = xn1;
+    *ptime_r = guess;
     return 0;
 }
 
@@ -667,14 +671,14 @@ stepcompress_push_bezier(
     struct bezier b;
     init_bezier_coeffs(&b, start_sv, end_sv);
     double max_err = 1. / (sc->mcu_freq * move_time * 2.);
-    double t = .25;
+    double time_r = .25;
     struct queue_append qa = queue_append_start(sc, print_time, .5);
     for (int i = 0; i < count; ++i) {
         double scaled_dist = (i + .5 + step_offset) / move_time;
-        int ret = bezier_step_time(&b, scaled_dist, max_err, &t);
+        int ret = bezier_step_time(&b, scaled_dist, max_err, &time_r);
         if (ret)
             return ret;
-        double pos = t * move_time * sc->mcu_freq;
+        double pos = time_r * move_time * sc->mcu_freq;
         ret = queue_append(&qa, pos);
         if (ret)
             return ret;
