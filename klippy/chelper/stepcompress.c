@@ -621,8 +621,22 @@ bezier_step_time(struct bezier *b, double target, double max_err, double *ptime_
 {
     double last_guess = *ptime_r;
     double guess = bezier_nm_next_x(b, target, last_guess);
+    double min_guess = 0., max_guess = 1.;
     int i;
     for (i = 0; fabs(last_guess - guess) > max_err && i < NM_MAX_ITER; ++i) {
+        if (guess < last_guess) {
+            max_guess = last_guess;
+            if (guess <= min_guess) {
+                guess = .5 * (min_guess + max_guess);
+                continue;
+            }
+        } else {
+            min_guess = last_guess;
+            if (guess >= max_guess) {
+                guess = .5 * (min_guess + max_guess);
+                continue;
+            }
+        }
         last_guess = guess;
         guess = bezier_nm_next_x(b, target, last_guess);
     }
