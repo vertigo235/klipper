@@ -518,54 +518,6 @@ stepcompress_push(struct stepcompress *sc, double print_time, int32_t sdir)
     return sdir ? 1 : -1;
 }
 
-#if USE_BEZIER_VELOCITY_RAMP
-struct bezier {
-    double a, b, c, start_sv, end_sv;
-};
-
-static void
-init_bezier_coeffs(struct bezier *b, double start_sv, double end_sv)
-{
-    double sv_delta = end_sv - start_sv;
-    b->a =  6. * sv_delta;
-    b->b = 15. * -sv_delta;
-    b->c = 10. * sv_delta;
-    b->start_sv = start_sv;
-    b->end_sv = end_sv;
-}
-
-static inline double
-bezier_nm_next_x(struct bezier *b, double dist, double x)
-{
-    double x_3 = x*x*x;
-    double x_4 = x_3*x;
-    double x_5 = x_4*x;
-    double x_6 = x_5*x;
-    double f = b->a*x_6/6. + b->b*x_5/5. + b->c*x_4/4. + b->start_sv*x - dist;
-    double fp = b->a*x_5 + b->b*x_4 + b->c*x_3 + b->start_sv;
-    return x - f/fp;
-}
-
-#define NM_MAX_ITER 100
-static int32_t
-bezier_step_time(struct bezier *b, double dist, double max_err, double *x)
-{
-    double xn = *x;
-    double xn1 = bezier_nm_next_x(b, dist, xn);
-    int i;
-    for (i = 0; fabs(xn1 - xn) > max_err && i < NM_MAX_ITER; ++i) {
-        xn = xn1;
-        xn1 = bezier_nm_next_x(b, dist, xn);
-    }
-    if (i == NM_MAX_ITER) {
-        errorf("bezier_step_time did not converge after %d iterations!\n", NM_MAX_ITER);
-        return ERROR_RET;
-    }
-    *x = xn1;
-    return 0;
-}
-#endif
-
 // Schedule 'steps' number of steps at constant acceleration. If
 // acceleration is zero (ie, constant velocity) it uses the formula:
 //  step_time = print_time + step_num/start_sv
@@ -613,26 +565,6 @@ stepcompress_push_const(
         }
         queue_append_finish(qa);
     } else {
-#if USE_BEZIER_VELOCITY_RAMP
-        // Move with 5th-order Bézier curve smoothed velocity ramp
-        double end_sv = safe_sqrt(start_sv*start_sv + 2.*accel*steps);
-        double move_time = steps / ((start_sv + end_sv) * .5);
-        struct bezier b;
-        init_bezier_coeffs(&b, start_sv, end_sv);
-        double max_err = 1. / (sc->mcu_freq * move_time * 2.);
-        double t = .25;
-        struct queue_append qa = queue_append_start(sc, print_time, .5);
-        for (int i = 0; i < count; ++i) {
-            double scaled_dist = (i + .5 + step_offset) / move_time;
-            int ret = bezier_step_time(&b, scaled_dist, max_err, &t);
-            if (ret)
-                return ret;
-            double pos = t * move_time * sc->mcu_freq;
-            ret = queue_append(&qa, pos);
-            if (ret)
-                return ret;
-        }
-#else
         // Move with constant acceleration
         double inv_accel = 1. / accel;
         double accel_time = start_sv * inv_accel * sc->mcu_freq;
@@ -647,9 +579,107 @@ stepcompress_push_const(
                 return ret;
             pos += accel_multiplier;
         }
-#endif
         queue_append_finish(qa);
     }
+    return res;
+}
+
+struct bezier {
+    double a, b, c, start_sv, end_sv;
+};
+
+static void
+init_bezier_coeffs(struct bezier *b, double start_sv, double end_sv)
+{
+    double sv_delta = end_sv - start_sv;
+    b->a =  6. * sv_delta;
+    b->b = 15. * -sv_delta;
+    b->c = 10. * sv_delta;
+    b->start_sv = start_sv;
+    b->end_sv = end_sv;
+}
+
+static inline double
+bezier_nm_next_x(struct bezier *b, double dist, double x)
+{
+    double x_3 = x*x*x;
+    double x_4 = x_3*x;
+    double x_5 = x_4*x;
+    double x_6 = x_5*x;
+    double f = b->a*x_6/6. + b->b*x_5/5. + b->c*x_4/4. + b->start_sv*x - dist;
+    double fp = b->a*x_5 + b->b*x_4 + b->c*x_3 + b->start_sv;
+    return x - f/fp;
+}
+
+#define NM_MAX_ITER 100
+static int32_t
+bezier_step_time(struct bezier *b, double dist, double max_err, double *x)
+{
+    double xn = *x;
+    double xn1 = bezier_nm_next_x(b, dist, xn);
+    int i;
+    for (i = 0; fabs(xn1 - xn) > max_err && i < NM_MAX_ITER; ++i) {
+        xn = xn1;
+        xn1 = bezier_nm_next_x(b, dist, xn);
+    }
+    if (i == NM_MAX_ITER) {
+        errorf("bezier_step_time did not converge after %d iterations!\n", NM_MAX_ITER);
+        return ERROR_RET;
+    }
+    *x = xn1;
+    return 0;
+}
+
+int32_t
+stepcompress_push_bezier(
+    struct stepcompress *sc, double print_time
+    , double step_offset, double steps, double start_sv, double accel)
+{
+    if (!accel)
+        // Cruising speeds are not impacted by bezier style acceleration
+        return stepcompress_push_const(sc, print_time, step_offset, steps
+                                       , start_sv, accel);
+    // Calculate number of steps to take
+    int sdir = 1;
+    if (steps < 0) {
+        sdir = 0;
+        steps = -steps;
+        step_offset = -step_offset;
+    }
+    int count = steps + .5 - step_offset;
+    if (count <= 0 || count > 10000000) {
+        if (count && steps) {
+            errorf("push_const invalid count %d %f %f %f %f %f"
+                   , sc->oid, print_time, step_offset, steps
+                   , start_sv, accel);
+            return ERROR_RET;
+        }
+        return 0;
+    }
+    int ret = set_next_step_dir(sc, sdir);
+    if (ret)
+        return ret;
+    int res = sdir ? count : -count;
+
+    // Calculate each step time with 5th-order Bézier curve smoothed velocity ramp
+    double end_sv = safe_sqrt(start_sv*start_sv + 2.*accel*steps);
+    double move_time = steps / ((start_sv + end_sv) * .5);
+    struct bezier b;
+    init_bezier_coeffs(&b, start_sv, end_sv);
+    double max_err = 1. / (sc->mcu_freq * move_time * 2.);
+    double t = .25;
+    struct queue_append qa = queue_append_start(sc, print_time, .5);
+    for (int i = 0; i < count; ++i) {
+        double scaled_dist = (i + .5 + step_offset) / move_time;
+        int ret = bezier_step_time(&b, scaled_dist, max_err, &t);
+        if (ret)
+            return ret;
+        double pos = t * move_time * sc->mcu_freq;
+        ret = queue_append(&qa, pos);
+        if (ret)
+            return ret;
+    }
+    queue_append_finish(qa);
     return res;
 }
 
