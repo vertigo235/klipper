@@ -684,7 +684,8 @@ stepcompress_push_bezier(
     double max_err = 1. / (sc->mcu_freq * move_time * 2.);
     double time_r = .25;
     struct queue_append qa = queue_append_start(sc, print_time, .5);
-    for (int i = 0; i < count; ++i) {
+    int i;
+    for (i = 0; i < count; ++i) {
         double scaled_dist = (i + .5 + step_offset) / move_time;
         int ret = bezier_step_time(&b, scaled_dist, max_err, &time_r);
         if (ret)
