@@ -12,6 +12,14 @@ GCONF_DIAG1_STALL=1<<8
 REG_TCOOLTHRS=0x14
 REG_COOLCONF=0x6d
 REG_PWMCONF=0x70
+REG_MSLUTSTART=0x69
+REG_MSLUT0=0x60
+REG_MSLUTSEL = 0x68
+
+# Constants for sine wave correction
+TMC_WAVE_FACTOR_MIN = 1.03
+TMC_WAVE_FACTOR_MAX = 1.2
+TMC_WAVE_AMP = 247
 
 class TMC2130:
     def __init__(self, config):
@@ -38,6 +46,7 @@ class TMC2130:
         interpolate = config.getboolean('interpolate', True)
         sc_velocity = config.getfloat('stealthchop_threshold', 0., minval=0.)
         sc_threshold = self.velocity_to_clock(config, sc_velocity)
+        wave_factor = config.getfloat('linearity_correction', 0., minval=0., maxval=1.2)
         iholddelay = config.getint('driver_IHOLDDELAY', 8, minval=0, maxval=15)
         tpowerdown = config.getint('driver_TPOWERDOWN', 0, minval=0, maxval=255)
         blank_time_select = config.getint('driver_BLANK_TIME_SELECT', 1,
@@ -81,6 +90,9 @@ class TMC2130:
         # configure PWMCONF
         self.add_config_cmd(REG_PWMCONF, pwm_ampl | (pwm_grad << 8)
                             | (pwm_freq << 16) | (pwm_scale << 18))
+        # configure Linearity Correction
+        if wave_factor:
+            self.set_wave(wave_factor, True)
     def add_config_cmd(self, addr, val):
         self.mcu.add_config_cmd("spi_send oid=%d data=%02x%08x" % (
             self.oid, (addr | 0x80) & 0xff, val & 0xffffffff), is_init=True)
@@ -115,6 +127,106 @@ class TMC2130:
         data = [(addr | 0x80) & 0xff, (val >> 24) & 0xff, (val >> 16) & 0xff,
                 (val >> 8) & 0xff, val & 0xff]
         self.spi_send_cmd.send([self.oid, data])
+    def set_wave(self, fac, init=False):
+        if fac < TMC_WAVE_FACTOR_MIN:
+             fac = 0.0
+        elif fac > TMC_WAVE_FACTOR_MAX:
+            fac = TMC_WAVE_FACTOR_MAX
+        vA = 0
+        prevA = 0
+        delta0 = 0
+        delta1 = 1
+        w = [1, 1, 1, 1]
+        x = [255, 255, 255]
+        seg = 0
+        bitVal = 0
+        deltaA = 0
+        reg = 0
+        # configure MSLUTSTART
+        if init:
+            self.add_config_cmd(REG_MSLUTSTART, (TMC_WAVE_AMP << 16))
+        else:
+            self.set_register(REG_MSLUTSTART, (TMC_WAVE_AMP << 16))
+        for i in range(256):
+            if (i & 31) == 0:
+                reg = 0
+            if fac == 0:
+                # default TMC wave
+                vA = int((TMC_WAVE_AMP + 1) * math.sin((2*math.pi*i + math.pi)/1024) + .5) - 1
+            else:
+                # corrected wave
+                vA = int(TMC_WAVE_AMP * math.pow(math.sin(2*math.pi*i/1024), fac) + .5)
+            deltaA = vA - prevA
+            prevA = vA
+            bitVal = -1
+            if deltaA == delta0:
+                bitVal = 0
+            elif deltaA == delta1:
+                bitVal = 1
+            else:
+                if deltaA < delta0:
+                    #switch w bit down
+                    bitVal = 0
+                    if deltaA == -1:
+                        delta0 = -1
+                        delta1 = 0
+                        w[seg+1] = 0
+                    elif deltaA == 0:
+                        delta0 = 0
+                        delta1 = 1
+                        w[seg+1] = 1
+                    elif deltaA == 1:
+                        delta0 = 1
+                        delta1 = 2
+                        w[seg+1] = 2
+                    else:
+                        bitVal = -1
+                    if bitVal >= 0:
+                        x[seg] = i
+                        seg += 1
+                elif deltaA > delta1:
+                    #switch w bit up
+                    bitVal = 1
+                    if deltaA == 1:
+                        delta0 = 0
+                        delta1 = 1
+                        w[seg+1] = 1
+                    elif deltaA == 2:
+                        delta0 = 1
+                        delta1 = 2
+                        w[seg+1] = 2
+                    elif deltaA == 3:
+                        delta0 = 2
+                        delta1 = 3
+                        w[seg+1] = 3
+                    else:
+                        bitVal = -1
+                    if bitVal >= 0:
+                        x[seg] = i
+                        seg += 1
+            if bitVal < 0:
+                # delta out of range
+                break
+            if seg > 3: # TODO: should this be greater than 2?
+                # segment out of range
+                break
+            if bitVal == 1:
+                reg |= 0x80000000
+            if (i & 31) == 31:
+                #configure MSLUT
+                if init:
+                    self.add_config_cmd(REG_MSLUT0 + ((i >> 5) & 7), reg)
+                else:
+                    self.set_register(REG_MSLUT0 + ((i >> 5) & 7), reg)
+            else:
+                reg >>= 1
+        # configure MSLUTSEL
+        if init:
+            self.add_config_cmd(REG_MSLUTSEL, w[0] | (w[1] << 2) | (w[2] << 4) | (w[3] << 6)
+                                | (x[0] << 8) | (x[1] << 16) | (x[2] << 24))
+        else:
+            self.set_register(REG_MSLUTSEL, w[0] | (w[1] << 2) | (w[2] << 4) | (w[3] << 6)
+                              | (x[0] << 8) | (x[1] << 16) | (x[2] << 24))
 
 # Endstop wrapper that enables tmc2130 "sensorless homing"
 class TMC2130VirtualEndstop:
