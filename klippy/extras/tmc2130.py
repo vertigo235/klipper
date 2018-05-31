@@ -4,6 +4,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import math
+import logging
 
 TMC_FREQUENCY=13200000.
 REG_GCONF=0x00
@@ -91,8 +92,7 @@ class TMC2130:
         self.add_config_cmd(REG_PWMCONF, pwm_ampl | (pwm_grad << 8)
                             | (pwm_freq << 16) | (pwm_scale << 18))
         # configure Linearity Correction
-        if wave_factor:
-            self.set_wave(wave_factor, True)
+        self.set_wave(wave_factor, True)
     def add_config_cmd(self, addr, val):
         self.mcu.add_config_cmd("spi_send oid=%d data=%02x%08x" % (
             self.oid, (addr | 0x80) & 0xff, val & 0xffffffff), is_init=True)
@@ -132,6 +132,7 @@ class TMC2130:
              fac = 0.0
         elif fac > TMC_WAVE_FACTOR_MAX:
             fac = TMC_WAVE_FACTOR_MAX
+        error = None
         vA = 0
         prevA = 0
         delta0 = 0
@@ -150,7 +151,7 @@ class TMC2130:
         for i in range(256):
             if (i & 31) == 0:
                 reg = 0
-            if fac == 0:
+            if fac == 0.:
                 # default TMC wave
                 vA = int((TMC_WAVE_AMP + 1) * math.sin((2*math.pi*i + math.pi)/1024) + .5) - 1
             else:
@@ -206,9 +207,11 @@ class TMC2130:
                         seg += 1
             if bitVal < 0:
                 # delta out of range
+                error = "Error setting TMC2130 Sine Wave, Delta Out of Range"
                 break
             if seg > 3: # TODO: should this be greater than 2?
                 # segment out of range
+                error = "Error setting TMC2130 Sine Wave, Segment Out of Range"
                 break
             if bitVal == 1:
                 reg |= 0x80000000
@@ -224,9 +227,13 @@ class TMC2130:
         if init:
             self.add_config_cmd(REG_MSLUTSEL, w[0] | (w[1] << 2) | (w[2] << 4) | (w[3] << 6)
                                 | (x[0] << 8) | (x[1] << 16) | (x[2] << 24))
+            if error:
+                raise self.printer.config.error(error)
         else:
             self.set_register(REG_MSLUTSEL, w[0] | (w[1] << 2) | (w[2] << 4) | (w[3] << 6)
                               | (x[0] << 8) | (x[1] << 16) | (x[2] << 24))
+            if error:
+                logging.error(error)
 
 # Endstop wrapper that enables tmc2130 "sensorless homing"
 class TMC2130VirtualEndstop:
