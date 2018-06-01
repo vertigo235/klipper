@@ -93,6 +93,12 @@ class TMC2130:
                             | (pwm_freq << 16) | (pwm_scale << 18))
         # configure Linearity Correction
         self.set_wave(wave_factor, True)
+        # Linearity Correction GCODE setup
+        stepper_name = config.get_name().split()[1]
+        self.gcode = self.printer.lookup_object('gcode')
+        self.gcode.register_mux_command("TMC_SET_WAVE", "STEPPER", stepper_name,
+                                        self.cmd_TMC_SET_WAVE,
+                                        desc=self.cmd_TMC_SET_WAVE_help)
     def add_config_cmd(self, addr, val):
         self.mcu.add_config_cmd("spi_send oid=%d data=%02x%08x" % (
             self.oid, (addr | 0x80) & 0xff, val & 0xffffffff), is_init=True)
@@ -234,6 +240,10 @@ class TMC2130:
                               | (x[0] << 8) | (x[1] << 16) | (x[2] << 24))
             if error:
                 logging.error(error)
+    cmd_TMC_SET_WAVE_help = "Set wave correction factor for TMC2130 driver"
+    def cmd_TMC_SET_WAVE(self, params):
+        if 'FACTOR' in params:
+            self.set_wave(self.gcode.get_float('FACTOR', params))
 
 # Endstop wrapper that enables tmc2130 "sensorless homing"
 class TMC2130VirtualEndstop:
