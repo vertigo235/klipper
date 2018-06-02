@@ -18,13 +18,14 @@ REG_MSLUT0=0x60
 REG_MSLUTSEL = 0x68
 
 # Constants for sine wave correction
-TMC_WAVE_FACTOR_MIN = 1.03
-TMC_WAVE_FACTOR_MAX = 1.2
+TMC_WAVE_FACTOR_MIN = 1.005
+TMC_WAVE_FACTOR_MAX = 1.3
 TMC_WAVE_AMP = 247
 
 class TMC2130:
     def __init__(self, config):
         self.printer = config.get_printer()
+        self.stepper_name = config.get_name().split()[1]
         # pin setup
         ppins = self.printer.lookup_object("pins")
         cs_pin = config.get('cs_pin')
@@ -94,9 +95,8 @@ class TMC2130:
         # configure Linearity Correction
         self.set_wave(wave_factor, True)
         # Linearity Correction GCODE setup
-        stepper_name = config.get_name().split()[1]
         self.gcode = self.printer.lookup_object('gcode')
-        self.gcode.register_mux_command("TMC_SET_WAVE", "STEPPER", stepper_name,
+        self.gcode.register_mux_command("TMC_SET_WAVE", "STEPPER", self.stepper_name,
                                         self.cmd_TMC_SET_WAVE,
                                         desc=self.cmd_TMC_SET_WAVE_help)
     def add_config_cmd(self, addr, val):
@@ -240,6 +240,8 @@ class TMC2130:
                               | (x[0] << 8) | (x[1] << 16) | (x[2] << 24))
             if error:
                 logging.error(error)
+                return
+        logging.info("TMC2130: Wave factor on stepper [%s] correctly set to: %f" % (self.stepper_name, fac))
     cmd_TMC_SET_WAVE_help = "Set wave correction factor for TMC2130 driver"
     def cmd_TMC_SET_WAVE(self, params):
         if 'FACTOR' in params:
