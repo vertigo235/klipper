@@ -213,11 +213,11 @@ class TMC2130:
                         seg += 1
             if bitVal < 0:
                 # delta out of range
-                error = "Error setting TMC2130 Sine Wave, Delta Out of Range"
+                error = "TMC2130: Error setting Sine Wave, Delta Out of Range"
                 break
             if seg > 3: # TODO: should this be greater than 2?
                 # segment out of range
-                error = "Error setting TMC2130 Sine Wave, Segment Out of Range"
+                error = "TMC2130: Error setting Sine Wave, Segment Out of Range"
                 break
             if bitVal == 1:
                 reg |= 0x80000000
@@ -229,6 +229,7 @@ class TMC2130:
                     self.set_register(REG_MSLUT0 + ((i >> 5) & 7), reg)
             else:
                 reg >>= 1
+        success_msg = "TMC2130: Wave factor on stepper [%s] set to: %f" % (self.stepper_name, fac)
         # configure MSLUTSEL
         if init:
             self.add_config_cmd(REG_MSLUTSEL, w[0] | (w[1] << 2) | (w[2] << 4) | (w[3] << 6)
@@ -240,8 +241,11 @@ class TMC2130:
                               | (x[0] << 8) | (x[1] << 16) | (x[2] << 24))
             if error:
                 logging.error(error)
+                self.gcode.respond_info(error)
                 return
-        logging.info("TMC2130: Wave factor on stepper [%s] correctly set to: %f" % (self.stepper_name, fac))
+            else:
+                self.gcode.respond_info(success_msg)
+        logging.info(success_msg)
     cmd_TMC_SET_WAVE_help = "Set wave correction factor for TMC2130 driver"
     def cmd_TMC_SET_WAVE(self, params):
         if 'FACTOR' in params:
