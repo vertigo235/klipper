@@ -7,6 +7,10 @@ import logging
 import math
 import probe, mathutil
 
+# TODO: should probably move this to mathutil
+def constrain(val, min_val, max_val):
+    return min(max_val, max(min_val, val))
+
 # TODO: The values below are for Prusa i3 MK3 only.  I should
 # retreive these from the config, along with the actual
 # probe points.
@@ -195,11 +199,47 @@ class ZMesh:
         return self.mesh_x_min + self.mesh_x_dist * index
     def get_y_coordinate(self, index):
         return self.mesh_y_min + self.mesh_y_dist * index
-    def get_adjusted_z(self, pos_x, pos_y):
+    def get_z(self, x, y):
         if self.mesh_z_table:
-            #TODO:Spline interpolation or linear interpolation?
-            return 0.
+            # TODO: This is linear interpolation straight from Prusa's
+            # implementation of mesh bed leveling.  In the future we
+            # may want to look for other ways to interpolate z-coordinates
+            x_index = 0
+            y_index = 0
+            s = 0.
+            t = 0.
+            x_index = int(math.floor((x - self.mesh_x_min) /self.mesh_x_dist))
+            if (x_index < 0):
+                x_index = 0
+                s = (x -self.mesh_x_min) / self.mesh_x_dist
+                s = min(s, 1.)
+            elif x_index > (self.mesh_x_count - 2):
+                x_index = self.mesh_x_count - 2
+                s = (x - self.get_x_coordinate(x_index)) / self.mesh_x_dist
+                s = max(s, 0.)
+            else:
+                s = (x - self.get_x_coordinate(x_index)) / self.mesh_x_dist
+                s = constrain(s, 0., 1.)
+            y_index = int(math.floor((y - self.mesh_y_min) / self.mesh_y_dist))
+            if y_index < 0:
+                y_index = 0
+                t = (y - self.mesh_y_min) / self.mesh_y_dist
+                t = min(t, 1.)
+            elif y_index > (self.mesh_y_count - 2):
+                y_index = self.mesh_y_count - 2
+                t = (y - self.get_y_coordinate(y_index)) / self.mesh_y_dist
+                t = max(t, 0.)
+            else:
+                t = (y - self.get_y_coordinate(y_index)) / self.mesh_y_dist
+                t = constrain(t, 0., 1.)
+            si = 1. - s
+            z0 = si * self.mesh_z_table[y_index][x_index] + \
+                 s * self.mesh_z_table[y_index][x_index+1]
+            z1 = si * self.mesh_z_table[y_index+1][x_index] + \
+                 s * self.mesh_z_table[y_index+1][x_index+1]
+            return (1. - t) * z0 + t * z1
         else:
+            # No mesh table generated, no z-adjustment
             return 0.
     def build_mesh(self, probed_z_table):
         self._sample_3x3(probed_z_table)
