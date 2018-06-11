@@ -26,11 +26,11 @@ Z_FADE_DIST = Z_FADE_MAX - Z_FADE_START
 Z_DELTA_THRESH = .025
 MOVE_TRAVERSE_DIST = 5.
 
-class MeshLeveler:
+class BedMesh:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.z_adjust = 0.
-        self.calibrate = MeshLevelCalibrate(config, self)
+        self.calibrate = BedMeshCalibrate(config, self)
         self.mesh_z = ZMesh(config)
         self.toolhead = None
         self.probed_z_table = None
@@ -39,12 +39,12 @@ class MeshLeveler:
         #self.probe_y_count = config.getint('probe_y_count' 3)
         self.gcode = self.printer.lookup_object('gcode')
         self.gcode.register_command(
-            'GET_MEASURED_POINTS', self.cmd_GET_MEASURED_POINTS,
-            desc=self.cmd_GET_MEASURED_POINTS_help)
+            'BED_MESH_OUTPUT', self.cmd_BED_MESH_OUTPUT,
+            desc=self.cmd_BED_MESH_OUTPUT_help)
         # Register G81 as alias
         self.gcode.register_command(
-            'G81', self.cmd_GET_MEASURED_POINTS,
-            desc=self.cmd_GET_MEASURED_POINTS_help)
+            'G81', self.cmd_BED_MESH_OUTPUT,
+            desc=self.cmd_BED_MESH_OUTPUT_help)
         self.gcode.set_move_transform(self)
     def printer_state(self, state):
         if state == 'connect':
@@ -82,8 +82,8 @@ class MeshLeveler:
                     self.toolhead.move(split_move, speed)
                 else:
                     self.gcode.respond_error("Mesh Leveling: Error splitting move ")
-    cmd_GET_MEASURED_POINTS_help = "Retreive interpolated grid of probed z-points"
-    def cmd_GET_MEASURED_POINTS(self, params):
+    cmd_BED_MESH_OUTPUT_help = "Retreive interpolated grid of probed z-points"
+    def cmd_BED_MESH_OUTPUT(self, params):
         if self.probed_z_table is None:
             self.gcode.respond_info("Bed has not been probed")
         else:
@@ -112,10 +112,10 @@ class MeshLeveler:
                 msg += "\n"
             self.gcode.respond(msg)
 
-class MeshLevelCalibrate:
-    def __init__(self, config, meshleveler):
+class BedMeshCalibrate:
+    def __init__(self, config, bedmesh):
         self.printer = config.get_printer()
-        self.meshleveler = meshleveler
+        self.bedmesh = bedmesh
         #TODO: Instead of calculating probe points, add them to config
         self.probe_helper = probe.ProbePointsHelper(config, self, 
                                                     self.calculate_probe_points())
@@ -127,12 +127,12 @@ class MeshLevelCalibrate:
         # Register MESH_BED_LEVING command
         self.gcode = self.printer.lookup_object('gcode')
         self.gcode.register_command(
-            'MESH_BED_LEVELING', self.cmd_MESH_BED_LEVELING,
-            desc=self.cmd_MESH_BED_LEVELING_help)
+            'BED_MESH_CALIBRATE', self.cmd_BED_MESH_CALIBRATE,
+            desc=self.cmd_BED_MESH_CALIBRATE_help)
         # Register G80 as alias
         self.gcode.register_command(
-            'G80', self.cmd_MESH_BED_LEVELING,
-            desc=self.cmd_MESH_BED_LEVELING_help)
+            'G80', self.cmd_BED_MESH_CALIBRATE,
+            desc=self.cmd_BED_MESH_CALIBRATE_help)
     def calculate_probe_points(self):
         probe_points = [
             (13.- BED_ZERO_REF_X, 10.4 - BED_ZERO_REF_Y),
@@ -146,9 +146,9 @@ class MeshLevelCalibrate:
             (216. - BED_ZERO_REF_X, 202.4 - BED_ZERO_REF_Y),
         ]
         return probe_points
-    cmd_MESH_BED_LEVELING_help = "Perform Mesh Bed Leveling"
-    def cmd_MESH_BED_LEVELING(self, params):
-        self.meshleveler.set_probed_z_table(None)
+    cmd_BED_MESH_CALIBRATE_help = "Perform Mesh Bed Leveling"
+    def cmd_BED_MESH_CALIBRATE(self, params):
+        self.bedmesh.set_probed_z_table(None)
         self.gcode.run_script("G28")
         self.probe_helper.start_probe()
         self.gcode.run_script("G1 X0 Y0 Z0.4 F3000")
@@ -172,7 +172,7 @@ class MeshLevelCalibrate:
                 # Odd y count, x probed in the negative directon
                 x_position = (PROBE_X_COUNT - 1) - (i % PROBE_X_COUNT)
             z_table[y_position][x_position] = pos[2] - z_offset
-        self.meshleveler.set_probed_z_table(z_table)
+        self.bedmesh.set_probed_z_table(z_table)
         self.gcode.respond_info("Mesh Bed Leveling Complete")
 
 class MoveSplitter:
@@ -351,4 +351,4 @@ class ZMesh:
                     self.mesh_z_table[y_last][i] * (y - y0) * (y - y1) / ((y2 - y0) * (y2 - y1))
 
 def load_config(config):
-    return MeshLeveler(config)
+    return BedMesh(config)
