@@ -882,6 +882,8 @@ class PrinterLCD:
             self.extruder1 = self.printer.lookup_object('extruder1', None)
             self.heater_bed = self.printer.lookup_object('heater_bed', None)
             self.progress = None
+            self.message_time = None
+            self.message = None
             self.gcode.register_command('M73', self.cmd_M73)
             # Load glyphs
             self.load_glyph(self.BED1_GLYPH, heat1_icon)
@@ -961,16 +963,35 @@ class PrinterLCD:
         gcode_info = self.gcode.get_status(eventtime)
         lcd_chip.write_text(0, 2, lcd_chip.char_speed_factor)
         self.draw_percent(1, 2, 4, gcode_info['speed_factor'])
-        # SD card print progress
-        if self.sdcard is not None:
+        # Print progress
+        progress = None
+        header = None
+        if self.progress is not None:
+            progress = self.progress / 100.
+            header = "PR"
+        elif self.sdcard is not None:
             info = self.sdcard.get_status(eventtime)
-            lcd_chip.write_text(7, 2, "SD")
-            self.draw_percent(9, 2, 4, info['progress'])
-        # Printing time and status
+            progress = info['progress']
+            header = "SD"
+        if progress:
+            lcd_chip.write_text(7, 2, header)
+            self.draw_percent(9, 2, 4, progress)
+        # TODO: Alternate Time left?  I need to make sure there is room on the screen
+        # Printing time
         toolhead_info = self.toolhead.get_status(eventtime)
         lcd_chip.write_text(14, 2, lcd_chip.char_clock)
         self.draw_time(15, 2, toolhead_info['printing_time'])
-        self.draw_status(0, 3, gcode_info, toolhead_info)
+        # If there is a message set by M117, display it instead of toolhead info
+        if self.message:
+            lcd_chip.write_text(0, 3, self.message)
+            if self.msg_time:
+                # Screen updates every .5 seconds
+                self.msg_time -= .5 
+                if self.msg_time <= 0.:
+                    self.message = None
+                    self.message_time = None
+        else:
+            self.draw_status(0, 3, gcode_info, toolhead_info)
     def screen_update_st7920(self, eventtime):
         # Heaters
         if self.extruder0 is not None:
@@ -1000,12 +1021,11 @@ class PrinterLCD:
 
         progress = None
         # SD card print progress
-        if self.sdcard is not None:
+        if self.progress is not None:
+            progress = self.progress / 100.
+        elif self.sdcard is not None:
             info = self.sdcard.get_status(eventtime)
             progress = info['progress']
-        elif self.progress is not None:
-            progress = self.progress / 100.
-
         if progress is not None:
             if extruder_count == 1:
                 x, y, width = 0, 2, 10
@@ -1035,8 +1055,17 @@ class PrinterLCD:
         else:
             offset = 1 if printing_time < 100 * 60 * 60 else 0
             self.draw_time(10 + offset, 2, printing_time)
-
-        self.draw_status(0, 3, gcode_info, toolhead_info)
+        # if there is a message set by M117, display it instead of toolhaed info
+        if self.message:
+            self.lcd_chip.write_text(0, 3, self.message)
+            if self.msg_time:
+                # Screen updates every .5 seconds
+                self.msg_time -= .5 
+                if self.msg_time <= 0.:
+                    self.message = None
+                    self.message_time = None
+        else:
+            self.draw_status(0, 3, gcode_info, toolhead_info)
     # Screen update helpers
     def draw_heater(self, x, y, info):
         temperature, target = info['temperature'], info['target']
@@ -1060,6 +1089,9 @@ class PrinterLCD:
             pos = self.toolhead.get_position()
             status = "X%-4.0fY%-4.0fZ%-5.2f" % (pos[0], pos[1], pos[2])
         self.lcd_chip.write_text(x, y, status)
+    def set_message(self, msg, msg_time=None):
+        self.message = msg
+        self.msg_time = msg_time
     # print progress: M73 P<percent>
     def cmd_M73(self, params):
         self.progress = self.gcode.get_int('P', params, minval=0, maxval=100)
