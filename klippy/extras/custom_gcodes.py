@@ -13,6 +13,7 @@ class CustomGcode:
             'M117':False,
             'M204':False}
         self.printer = config.get_printer()
+        self.reactor = self.printer.get_reactor()
         gcodes = config.get('enabled_gcodes', None).split('\n')
         if gcodes is not None:
             for gc in gcodes:
@@ -33,6 +34,7 @@ class CustomGcode:
                 self.gcode.register_command(key, command_func, 
                                             desc = help_attr)
                 logging.info("Extended gcode " + key + " enabled" )
+        self.beeper_off_timer = self.reactor.register_timer(self._beeper_off)
     def printer_state(self, state):
         if state == 'ready':
             if self.supported_gcodes['M204'] and (self.config_extruder_accel == None):
@@ -44,7 +46,6 @@ class CustomGcode:
                 except:
                     self.display = None
                     self.gcode.respond_info("Display not added to config")
-
     cmd_M204_help = "Set printer acceleration limit"
     def cmd_M204(self, params):
         toolhead = self.printer.lookup_object('toolhead')
@@ -81,6 +82,9 @@ class CustomGcode:
                 self.display.set_message(msg)
             else:
                 self. display.set_message(None)
+    def _beeper_off(self, eventtime):
+        self.gcode.run_script("SET_PIN PIN=beeper VALUE=0")
+        return self.reactor.NEVER
     cmd_LOAD_FILAMENT_help = "Load filament into Extruder"
     def cmd_LOAD_FILAMENT(self, params):
         length = 95.
@@ -97,10 +101,9 @@ class CustomGcode:
         self.gcode.run_script("G1 E25 F100")
         toolhead.wait_moves()
         if self.display:
-            self.display.set_message("Filament Load Complete", 5.)
+            self.display.set_message("Load Complete", 5.)
     cmd_UNLOAD_FILAMENT_help = "Unload filament from Extruder"
     def cmd_UNLOAD_FILAMENT(self, params):
-        #TODO: Set a command to change the amount to unload
         length = 80.
         if 'LENGTH' in params:
             length = self.gcode.get_float('LENGTH', params, 80, above=45.)
@@ -116,7 +119,10 @@ class CustomGcode:
         toolhead.wait_moves()
         toolhead.motor_off()
         if self.display:
-            self.display.set_message("REMOVE FILAMENT NOW!!!!", 5.)
+            self.display.set_message("REMOVE FILAMENT NOW!", 5.)
+        self.gcode.run_script("SET_PIN PIN=beeper VALUE=1")
+        waketime = self.reactor.monotonic() + .5
+        self.reactor.update_timer(self.beeper_off_timer, waketime)
 
 def load_config(config):
     return CustomGcode(config)
