@@ -8,9 +8,13 @@ import math
 import probe
 import json
 
-# TODO: should probably move this to mathutil
+# Constrain value between min and max
 def constrain(val, min_val, max_val):
     return min(max_val, max(min_val, val))
+
+# Linear interpolation between two values
+def lerp(t, v0, v1):
+    return (1. - t) * v0 + t * v1
 
 class BedMesh:
     FADE_DISABLE = 0x7FFFFFFF
@@ -24,12 +28,12 @@ class BedMesh:
         fade_start = config.getfloat('fade_start', 1., minval=0.)
         fade_end = config.getfloat('fade_end', 10.)
         self.gcode = self.printer.lookup_object('gcode')
-        self.splitter = MoveSplitter(config, self.gcode, fade_start, 
+        self.splitter = MoveSplitter(config, self.gcode, fade_start,
                                      fade_end)
         self.adj_stop = fade_end
         if fade_end <= fade_start:
             # Never Fade Mesh
-            self.adj_stop = self.FADE_DISABLE         
+            self.adj_stop = self.FADE_DISABLE
         self.gcode.register_command(
             'BED_MESH_OUTPUT', self.cmd_BED_MESH_OUTPUT,
             desc=self.cmd_BED_MESH_OUTPUT_help)
@@ -85,7 +89,7 @@ class BedMesh:
                 msg += "\n"
             logging.info(msg)
             self.gcode.respond_info(msg)
-            msg = "Num X,Y: %d,%d\n" % (self.z_mesh.mesh_x_count, self.z_mesh.mesh_y_count) 
+            msg = "Num X,Y: %d,%d\n" % (self.z_mesh.mesh_x_count, self.z_mesh.mesh_y_count)
             msg +="Search Height: %d\n" % (self.horizontal_move_z)
             msg +="Interpolation Algorithm: %s\n" % (self.z_mesh.probe_params['algo'])
             msg += "Measured points:\n"
@@ -105,11 +109,8 @@ class BedMeshCalibrate:
         self.probe_params = {}
         self.probe_x_count = 3
         self.probe_y_count = 3
-        points = config.get('points', None)
-        if points is None:
-            points = self._get_default_points()
-        else:
-            points = self._get_config_points(config, points)
+        points = config.get('points')
+        points = self._parse_points(config, points)
         self._init_probe_params(config, points)
         self.probe_helper = probe.ProbePointsHelper(config, self, points)
         # Automatic probe:z_virtual_endstop XY detection
@@ -126,7 +127,7 @@ class BedMeshCalibrate:
         self.gcode.register_command(
             'G80', self.cmd_BED_MESH_CALIBRATE,
             desc=self.cmd_BED_MESH_CALIBRATE_help)
-    def _get_config_points(self, config, points):
+    def _parse_points(self, config, points):
         points = points.split('\n')
         try:
             points = [line.split(',', 1) for line in points if line.strip()]
@@ -148,7 +149,7 @@ class BedMeshCalibrate:
                 y_points.append(pt[1])
         self.probe_x_count = len(x_points)
         self.probe_y_count = len(y_points)
-        logging.info("bed_mesh: %d X rows, %d Y columns" % 
+        logging.info("bed_mesh: %d X rows, %d Y columns" %
                     (self.probe_x_count, self.probe_y_count))
         if self.probe_x_count < 3:
             raise config.error("bed_mesh: Requires a minimum 3 X probe points")
@@ -177,21 +178,6 @@ class BedMeshCalibrate:
                 raise config.error("bed_mesh: Y points not equidistant")
         logging.info('bed_mesh: Probe Points Validated')
         return points
-    def _get_default_points(self):
-        BED_ZERO_REF_X = 2.
-        BED_ZERO_REF_Y = 9.4
-        probe_points = [
-            (13.- BED_ZERO_REF_X, 10.4 - BED_ZERO_REF_Y),
-            (115.- BED_ZERO_REF_X, 10.4 - BED_ZERO_REF_Y),
-            (216. - BED_ZERO_REF_X, 10.4 - BED_ZERO_REF_Y),
-            (216. - BED_ZERO_REF_X, 106.4 - BED_ZERO_REF_Y),
-            (115. - BED_ZERO_REF_X, 106.4 - BED_ZERO_REF_Y),
-            (13. - BED_ZERO_REF_X, 106.4 - BED_ZERO_REF_Y),
-            (13. - BED_ZERO_REF_X, 202.4 - BED_ZERO_REF_Y),
-            (115. - BED_ZERO_REF_X, 202.4 - BED_ZERO_REF_Y),
-            (216. - BED_ZERO_REF_X, 202.4 - BED_ZERO_REF_Y),
-        ]
-        return probe_points
     def _init_probe_params(self, config, points):
         min_x = points[0][0]
         max_x = points[0][0]
@@ -204,15 +190,15 @@ class BedMeshCalibrate:
             self.probe_params['max_y'] = max(max_y, point[1])
         self.probe_params['x_count'] = self.probe_x_count
         self.probe_params['y_count'] = self.probe_y_count
-        self.probe_params['x_offset'] = config.getfloat('probe_x_offset', 24.)
-        self.probe_params['y_offset'] = config.getfloat('probe_y_offset', 5.)
+        self.probe_params['x_offset'] = config.getfloat('probe_x_offset')
+        self.probe_params['y_offset'] = config.getfloat('probe_y_offset')
         self.probe_params['mesh_x_pps'] = config.getint('mesh_x_pps', None, minval=0)
         self.probe_params['mesh_y_pps'] = config.getint('mesh_y_pps', None, minval=0)
         self.probe_params['algo'] = config.get('algorithm', 'lagrange').strip().lower()
         if self.probe_params['algo'] not in self.ALGOS:
             raise config.error("bed_mesh: Unknown algorithm <%s>" %
                               (self.probe_params['algo']))
-        self.probe_params['tension'] = config.getfloat('bicubic_tension', .2, 
+        self.probe_params['tension'] = config.getfloat('bicubic_tension', .2,
                                                         minval=0., maxval=2.)
     cmd_BED_MESH_CALIBRATE_help = "Perform Mesh Bed Leveling"
     def cmd_BED_MESH_CALIBRATE(self, params):
@@ -228,7 +214,7 @@ class BedMeshCalibrate:
     def finalize(self, z_offset, positions):
         # create a 2-D array representing the probed z-positions.  First
         # dimension is y, second dimension is x
-        self.probed_z_table = [[0. for i in range(self.probe_x_count)] 
+        self.probed_z_table = [[0. for i in range(self.probe_x_count)]
                        for j in range(self.probe_y_count)]
         # Extract probed z-positions from probed positions and add
         # them to organized list
@@ -295,15 +281,15 @@ class MoveSplitter:
             self.current_pos[:] = self.next_pos
             return
         if self.is_x_move:
-            self.current_pos[0] = (1. - t) * self.prev_pos[0] + t * self.next_pos[0]
+            self.current_pos[0] = lerp(t, self.prev_pos[0], self.next_pos[0])
         if self.is_y_move:
-            self.current_pos[1] = (1. - t) * self.prev_pos[1] + t * self.next_pos[1]
+            self.current_pos[1] = lerp(t, self.prev_pos[1], self.next_pos[1])
         if self.is_z_move:
-            self.current_pos[2] = (1. - t) * self.prev_pos[2] + t * self.next_pos[2]
+            self.current_pos[2] = lerp(t, self.prev_pos[2], self.next_pos[2])
         # Since extrusion changes linearly through a move, same interpolation
         # can be applied to E-Axis
         if not self.is_travel:
-            self.current_pos[3] = (1. - t) * self.prev_pos[3] + t * self.next_pos[3]
+            self.current_pos[3] = lerp(t, self.prev_pos[3], self.next_pos[3])
     def split(self):
         if not self.traverse_complete:
             if self.is_x_move or self.is_y_move:
@@ -379,43 +365,33 @@ class ZMesh:
         return self.mesh_y_min + self.mesh_y_dist * index
     def get_z(self, x, y):
         if self.mesh_z_table:
-            x_index = 0
-            y_index = 0
-            s = 0.
-            t = 0.
-            x_index = int(math.floor((x - self.mesh_x_min) /self.mesh_x_dist))
-            if (x_index < 0):
-                x_index = 0
-                s = (x -self.mesh_x_min) / self.mesh_x_dist
-                s = min(s, 1.)
-            elif x_index > (self.mesh_x_count - 2):
-                x_index = self.mesh_x_count - 2
-                s = (x - self.get_x_coordinate(x_index)) / self.mesh_x_dist
-                s = max(s, 0.)
-            else:
-                s = (x - self.get_x_coordinate(x_index)) / self.mesh_x_dist
-                s = constrain(s, 0., 1.)
-            y_index = int(math.floor((y - self.mesh_y_min) / self.mesh_y_dist))
-            if y_index < 0:
-                y_index = 0
-                t = (y - self.mesh_y_min) / self.mesh_y_dist
-                t = min(t, 1.)
-            elif y_index > (self.mesh_y_count - 2):
-                y_index = self.mesh_y_count - 2
-                t = (y - self.get_y_coordinate(y_index)) / self.mesh_y_dist
-                t = max(t, 0.)
-            else:
-                t = (y - self.get_y_coordinate(y_index)) / self.mesh_y_dist
-                t = constrain(t, 0., 1.)
-            si = 1. - s
-            z0 = si * self.mesh_z_table[y_index][x_index] + \
-                 s * self.mesh_z_table[y_index][x_index+1]
-            z1 = si * self.mesh_z_table[y_index+1][x_index] + \
-                 s * self.mesh_z_table[y_index+1][x_index+1]
-            return (1. - t) * z0 + t * z1
+            tbl = self.mesh_z_table
+            tx, xidx = self._get_linear_index(x, 0)
+            ty, yidx = self._get_linear_index(y, 1)
+            z0 = lerp(tx, tbl[yidx][xidx], tbl[yidx][xidx+1])
+            z1 = lerp(tx, tbl[yidx+1][xidx], tbl[yidx+1][xidx+1])
+            return lerp(ty, z0, z1)
         else:
             # No mesh table generated, no z-adjustment
             return 0.
+    def _get_linear_index(self, coord, axis):
+        if axis == 0:
+            # X-axis
+            mesh_min = self.mesh_x_min
+            mesh_cnt = self.mesh_x_count
+            mesh_dist = self.mesh_x_dist
+            cfunc = self.get_x_coordinate
+        else:
+            # Y-axis
+            mesh_min = self.mesh_y_min
+            mesh_cnt = self.mesh_y_count
+            mesh_dist = self.mesh_y_dist
+            cfunc = self.get_y_coordinate
+        t = 0.
+        idx = int(math.floor((coord - mesh_min) / mesh_dist))
+        idx = constrain(idx, 0, mesh_cnt - 2)
+        t = (coord - cfunc(idx)) / mesh_dist
+        return constrain(t, 0., 1.), idx
     def _sample_direct(self, probed_z_table):
         self.mesh_z_table = probed_z_table
     def _sample_lagrange(self, z_table):
@@ -437,14 +413,14 @@ class ZMesh:
                 if j % x_mult == 0:
                     continue
                 x = self.get_x_coordinate(j)
-                self.mesh_z_table[i][j] = self._calc_lagrange(xpts, x, i, 1)
+                self.mesh_z_table[i][j] = self._calc_lagrange(xpts, x, i, 0)
         #Interpolate Y coordinates
         for i in range(self.mesh_x_count):
             for j in range(self.mesh_y_count):
                 if j % y_mult == 0:
                     continue
                 y = self.get_y_coordinate(j)
-                self.mesh_z_table[j][i] = self._calc_lagrange(ypts, y, i, 0)
+                self.mesh_z_table[j][i] = self._calc_lagrange(ypts, y, i, 1)
     def _get_lagrange_coords(self, z_table):
         xpts = []
         ypts = []
@@ -453,7 +429,7 @@ class ZMesh:
         for j in range(self.probe_params['y_count']):
             ypts.append(self.get_y_coordinate(j * self.y_mult))
         return xpts, ypts
-    def _calc_lagrange(self, lpts, c, vec, xdir=1):
+    def _calc_lagrange(self, lpts, c, vec, axis=0):
         pt_cnt = len(lpts)
         total = 0.
         for i in range(pt_cnt):
@@ -464,9 +440,11 @@ class ZMesh:
                     continue
                 n *= (c - lpts[j]) 
                 d *= (lpts[i] - lpts[j])
-            if xdir:
+            if axis == 0:
+                # Calc X-Axis
                 z = self.mesh_z_table[vec][i*self.x_mult]
             else:
+                # Calc Y-Axis
                 z = self.mesh_z_table[i*self.y_mult][vec]
             total += z * n / d
         return total
