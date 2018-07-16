@@ -4,13 +4,14 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import math, logging
-import stepper, homing, chelper, mathutil
+import stepper, homing, mathutil
 
 # Slow moves once the ratio of tower to XY movement exceeds SLOW_RATIO
 SLOW_RATIO = 3.
 
 class DeltaKinematics:
     def __init__(self, toolhead, config):
+        # Setup tower rails
         stepper_configs = [config.getsection('stepper_' + n)
                            for n in ['a', 'b', 'c']]
         rail_a = stepper.PrinterRail(
@@ -23,7 +24,7 @@ class DeltaKinematics:
             stepper_configs[2], need_position_minmax = False,
             default_position_endstop=a_endstop)
         self.rails = [rail_a, rail_b, rail_c]
-        self.need_motor_enable = self.need_home = True
+        # Read radius and arm lengths
         self.radius = radius = config.getfloat('delta_radius', above=0.)
         arm_length_a = stepper_configs[0].getfloat('arm_length', above=radius)
         self.arm_lengths = arm_lengths = [
@@ -33,6 +34,8 @@ class DeltaKinematics:
         self.endstops = [(rail.get_homing_info().position_endstop
                           + math.sqrt(arm2 - radius**2))
                          for rail, arm2 in zip(self.rails, self.arm2)]
+        # Setup boundary checks
+        self.need_motor_enable = self.need_home = True
         self.limit_xy2 = -1.
         self.max_z = min([rail.get_homing_info().position_endstop
                           for rail in self.rails])
@@ -57,14 +60,8 @@ class DeltaKinematics:
         self.towers = [(math.cos(math.radians(angle)) * radius,
                         math.sin(math.radians(angle)) * radius)
                        for angle in self.angles]
-        # Setup iterative solver
-        ffi_main, ffi_lib = chelper.get_ffi()
-        self.cmove = ffi_main.gc(ffi_lib.move_alloc(), ffi_lib.free)
-        self.move_fill = ffi_lib.move_fill
         for r, a, t in zip(self.rails, self.arm2, self.towers):
-            sk = ffi_main.gc(ffi_lib.delta_stepper_alloc(a, t[0], t[1]),
-                             ffi_lib.free)
-            r.setup_itersolve(sk)
+            r.setup_itersolve('delta_stepper_alloc', a, t[0], t[1])
         # Find the point where an XY move could result in excessive
         # tower movement
         half_min_step_dist = min([r.get_steppers()[0].get_step_dist()
@@ -83,8 +80,8 @@ class DeltaKinematics:
             % (math.sqrt(self.max_xy2), math.sqrt(self.slow_xy2),
                math.sqrt(self.very_slow_xy2)))
         self.set_position([0., 0., 0.], ())
-    def get_rails(self, flags=""):
-        return list(self.rails)
+    def get_steppers(self, flags=""):
+        return [s for rail in self.rails for s in rail.get_steppers()]
     def _actuator_to_cartesian(self, spos):
         sphere_coords = [(t[0], t[1], sp) for t, sp in zip(self.towers, spos)]
         return mathutil.trilateration(sphere_coords, self.arm2)
@@ -160,38 +157,41 @@ class DeltaKinematics:
     def move(self, print_time, move):
         if self.need_motor_enable:
             self._check_motor_enable(print_time)
-        self.move_fill(
-            self.cmove, print_time,
-            move.accel_t, move.cruise_t, move.decel_t,
-            move.start_pos[0], move.start_pos[1], move.start_pos[2],
-            move.axes_d[0], move.axes_d[1], move.axes_d[2],
-            move.start_v, move.cruise_v, move.accel)
         for rail in self.rails:
-            rail.step_itersolve(self.cmove)
+            rail.step_itersolve(move.cmove)
     # Helper functions for DELTA_CALIBRATE script
     def get_stable_position(self):
         steppers = [rail.get_steppers()[0] for rail in self.rails]
         return [int((ep - s.get_commanded_position()) / s.get_step_dist() + .5)
-                * s.get_step_dist()
                 for ep, s in zip(self.endstops, steppers)]
     def get_calibrate_params(self):
-        return {
-            'endstop_a': self.rails[0].get_homing_info().position_endstop,
-            'endstop_b': self.rails[1].get_homing_info().position_endstop,
-            'endstop_c': self.rails[2].get_homing_info().position_endstop,
-            'angle_a': self.angles[0], 'angle_b': self.angles[1],
-            'angle_c': self.angles[2], 'radius': self.radius,
-            'arm_a': self.arm_lengths[0], 'arm_b': self.arm_lengths[1],
-            'arm_c': self.arm_lengths[2] }
+        out = { 'radius': self.radius }
+        for i, axis in enumerate('abc'):
+            rail = self.rails[i]
+            out['endstop_'+axis] = rail.get_homing_info().position_endstop
+            out['stepdist_'+axis] = rail.get_steppers()[0].get_step_dist()
+            out['angle_'+axis] = self.angles[i]
+            out['arm_'+axis] = self.arm_lengths[i]
+        return out
+    def get_positions_from_stable(self, stable_positions, params):
+        angle_names = ['angle_a', 'angle_b', 'angle_c']
+        angles = [math.radians(params[an]) for an in angle_names]
+        radius = params['radius']
+        radius2 = radius**2
+        towers = [(math.cos(a) * radius, math.sin(a) * radius) for a in angles]
+        arm2 = [params[an]**2 for an in ['arm_a', 'arm_b', 'arm_c']]
+        stepdist_names = ['stepdist_a', 'stepdist_b', 'stepdist_c']
+        stepdists = [params[sn] for sn in stepdist_names]
+        endstop_names = ['endstop_a', 'endstop_b', 'endstop_c']
+        endstops = [params[en] + math.sqrt(a2 - radius2)
+                    for en, a2 in zip(endstop_names, arm2)]
+        out = []
+        for spos in stable_positions:
+            sphere_coords = [
+                (t[0], t[1], es - sp * sd)
+                for t, es, sd, sp in zip(towers, endstops, stepdists, spos) ]
+            out.append(mathutil.trilateration(sphere_coords, arm2))
+        return out
 
-def get_position_from_stable(spos, params):
-    angles = [params['angle_a'], params['angle_b'], params['angle_c']]
-    radius = params['radius']
-    radius2 = radius**2
-    towers = [(math.cos(angle) * radius, math.sin(angle) * radius)
-              for angle in map(math.radians, angles)]
-    arm2 = [a**2 for a in [params['arm_a'], params['arm_b'], params['arm_c']]]
-    endstops = [params['endstop_a'], params['endstop_b'], params['endstop_c']]
-    sphere_coords = [(t[0], t[1], es + math.sqrt(a2 - radius2) - p)
-                     for t, es, a2, p in zip(towers, endstops, arm2, spos)]
-    return mathutil.trilateration(sphere_coords, arm2)
+def load_kinematics(toolhead, config):
+    return DeltaKinematics(toolhead, config)
