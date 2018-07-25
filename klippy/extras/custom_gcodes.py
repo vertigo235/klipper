@@ -26,6 +26,8 @@ class CustomGcode:
                 gc = gc.strip()
                 if gc and gc in self.supported_gcodes:
                     self.supported_gcodes[gc] = True
+        self.extruder_type = config.get("extruder_type", "prusa") \
+                             .strip().lower()
         self.tmc_z_endstop = None
         self.z_rail = None
         self._setup_virtual_z_endstop(config)
@@ -84,7 +86,13 @@ class CustomGcode:
     cmd_LOAD_FILAMENT_help = "Load filament into Extruder"
     def cmd_LOAD_FILAMENT(self, params):
         # TODO: use buttons to ask if load should continue
-        length = self.gcode.get_float('LENGTH', params, 95., above=25.)
+        self.gcode.respond_info("Load Filament for extruder: %s" 
+                                % self.extruder_type)
+        if self.extruder_type == "skelestruder":
+            def_len = 85.
+        else:
+            def_len = 75.
+        length = self.gcode.get_float('LENGTH', params, def_len, above=25.)
         length -= 25.
         first_extrude = "G1 E%.2f F400" % (length)
         toolhead = self.printer.lookup_object('toolhead')
@@ -99,16 +107,34 @@ class CustomGcode:
             self.display.set_message("Load Complete", 5.)
     cmd_UNLOAD_FILAMENT_help = "Unload filament from Extruder"
     def cmd_UNLOAD_FILAMENT(self, params):
-        length = self.gcode.get_float('LENGTH', params, 80., above=45.)
-        length = -1 * (length - 45.)
-        second_extrude = "G1 E%.2f F1000" % (length)
+        self.gcode.respond_info("Load Filament for extruder: %s" 
+                                % self.extruder_type)
         toolhead = self.printer.lookup_object('toolhead')
-        if self.display:
-            self.display.set_message("Unloading Filament...")
-        self.gcode.run_script_from_command("M83")
-        self.gcode.run_script_from_command("G1 E0.0")
-        self.gcode.run_script_from_command("G1 E-45 F5200")
-        self.gcode.run_script_from_command(second_extrude)
+        length = self.gcode.get_float('LENGTH', params, 80., minval=42.)
+        if self.extruder_type == "skelestruder":
+            if length - 42. > 20.:
+                last_extrude = "G1 E%.2f F1000" % (-1 *(length - 42.))
+            else:
+                last_extrude = "G1 E-20 F1000"
+            if self.display:
+                self.display.set_message("Unloading Filament...")
+            self.gcode.run_script_from_command("M83")
+            self.gcode.run_script_from_command("G1 E0.0")
+            self.gcode.run_script_from_command("G1 E-32 F5200")
+            self.gcode.run_script_from_command("G1 E-10 F100")
+            self.gcode.run_script_from_command(last_extrude)
+        else:
+            if length - 60. > 20.:
+                last_extrude = "G1 E%.2f F1000" % (-1 *(length - 42.))
+            else:
+                last_extrude = "G1 E-20 F1000"
+            if self.display:
+                self.display.set_message("Unloading Filament...")
+            self.gcode.run_script_from_command("M83")
+            self.gcode.run_script_from_command("G1 E0.0")
+            self.gcode.run_script_from_command("G1 E-45 F5200")
+            self.gcode.run_script_from_command("G1 E-15 F1000")
+            self.gcode.run_script_from_command(last_extrude)
         toolhead.wait_moves()
         toolhead.motor_off()
         if self.display:
