@@ -61,6 +61,7 @@ class TMC2130:
                  '8': 5, '4': 6, '2': 7, '1': 8}
         self.mres = config.getchoice('microsteps', steps)
         interpolate = config.getboolean('interpolate', True)
+        stealth_enable = config.getboolean('stealthchop_enable', False)
         sc_velocity = config.getfloat('stealthchop_threshold', 0., minval=0.)
         wave_factor = config.getfloat('linearity_correction', 0., minval=0., maxval=1.2)
         sc_threshold = self.velocity_to_clock(config, sc_velocity)
@@ -90,7 +91,7 @@ class TMC2130:
             irun = self.current_bits(run_current, sense_resistor, vsense)
             ihold = self.current_bits(hold_current, sense_resistor, vsense)
         # configure GCONF
-        self.reg_GCONF = (sc_velocity > 0.) << 2
+        self.reg_GCONF = stealth_enable << 2
         self.add_config_cmd(REG_GCONF, self.reg_GCONF)
         # configure CHOPCONF
         self.add_config_cmd(
@@ -166,7 +167,7 @@ class TMC2130:
             else:
                 self.set_register(reg[0], reg[1])
         if not init:
-            self.gcode.respond_info(msg)
+            self.gcode.respond_info(msg)        
         logging.info(msg)
     def _set_wave(self, fac, init=False):
         if fac < TMC_WAVE_FACTOR_MIN:
@@ -288,7 +289,6 @@ class TMC2130:
     cmd_DUMP_TMC_help = "Read and display TMC2130 registers"
     def cmd_DUMP_TMC(self, params):
         self.printer.lookup_object('toolhead').get_last_move_time()
-        gcode = self.printer.lookup_object('gcode')
         logging.info("DUMP_TMC2130 %s", self.name)
         for reg, name in sorted(ReadRegisters.items()):
             self.spi_send_cmd.send([self.oid, [reg, 0x00, 0x00, 0x00, 0x00]])
@@ -299,7 +299,7 @@ class TMC2130:
             val = (pr[1] << 24) | (pr[2] << 16) | (pr[3] << 8) | pr[4]
             msg = "%15s: %8x" % (name, val)
             logging.info(msg)
-            gcode.respond_info(msg)
+            self.gcode.respond_info(msg)
 
 # Endstop wrapper that enables tmc2130 "sensorless homing"
 class TMC2130VirtualEndstop:
