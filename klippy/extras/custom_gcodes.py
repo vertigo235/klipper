@@ -11,14 +11,15 @@ TMC_REG_COOLCONF=0x6d
 class CustomGcode:
     def __init__(self, config):
         self.supported_gcodes = {
-            'LOAD_FILAMENT':True,
-            'UNLOAD_FILAMENT':True,
-            'SET_BEEPER':True,
+            'LOAD_FILAMENT': True,
+            'UNLOAD_FILAMENT': True,
+            'SET_BEEPER': True,
+            'M900': True,
             'TRAM_Z': False}
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         mcu = self.printer.lookup_object('mcu')
-        mcu.add_config_object(self)
+        mcu.register_config_callback(self.build_config)
         gcodes = config.get('enabled_gcodes', None)
         if gcodes is not None:
             gcodes = gcodes.split('\n')
@@ -26,13 +27,19 @@ class CustomGcode:
                 gc = gc.strip()
                 if gc and gc in self.supported_gcodes:
                     self.supported_gcodes[gc] = True
-        self.extruder_type = config.get("extruder_type", "prusa") \
-                             .strip().lower()
+        # TODO: the correct way to do this is to get the pressure
+        # for each extruder if there are multiples
+        self.default_pressure = 0.
+        if config.has_section('extruder'):
+            e_config = config.getsection('extruder')
+            self.default_pressure = e_config.getfloat(
+                'pressure_advance', 0., minval=0.)
+        self.extruder_type = config.get(
+            "extruder_type", "prusa").strip().lower()
         self.tmc_z_endstop = None
         self.z_rail = None
         self._setup_virtual_z_endstop(config)
         self.display = None
-        self.config_extruder_accel = None
         self.gcode = self.printer.lookup_object('gcode')
         for key in self.supported_gcodes:
             if self.supported_gcodes[key]:
@@ -42,8 +49,8 @@ class CustomGcode:
                 except:
                     raise config.error("Gcode [%s] Not supported" % (key))
                 self.gcode.register_command(key, command_func, 
-                                            desc = help_attr)
-                logging.info("Extended gcode " + key + " enabled" )
+                                            desc=help_attr)
+                logging.info("Extended gcode " + key + " enabled")
         self.beeper_off_timer = self.reactor.register_timer(self._beeper_off)
     def printer_state(self, state):
         if state == 'ready':
@@ -71,7 +78,8 @@ class CustomGcode:
                 self.supported_gcodes['TRAM_Z'] = True
             elif config.has_section('tmc2130 stepper_z'):
                 ppins = self.printer.lookup_object('pins')
-                es = ppins.setup_pin('endstop', 'tmc2130_stepper_z:virtual_endstop')
+                es = ppins.setup_pin(
+                    'endstop', 'tmc2130_stepper_z:virtual_endstop')
                 self.tmc_z_endstop = (es, "tmc2130_z_endstop")
                 self.supported_gcodes['TRAM_Z'] = True
     def _beeper_off(self, eventtime):
@@ -113,7 +121,7 @@ class CustomGcode:
         length = self.gcode.get_float('LENGTH', params, 80., minval=42.)
         if self.extruder_type == "skelestruder":
             if length - 42. > 20.:
-                last_extrude = "G1 E%.2f F1000" % (-1 *(length - 42.))
+                last_extrude = "G1 E%.2f F1000" % (-1 * (length - 42.))
             else:
                 last_extrude = "G1 E-20 F1000"
             if self.display:
@@ -125,7 +133,7 @@ class CustomGcode:
             self.gcode.run_script_from_command(last_extrude)
         else:
             if length - 60. > 20.:
-                last_extrude = "G1 E%.2f F1000" % (-1 *(length - 42.))
+                last_extrude = "G1 E%.2f F1000" % (-1 * (length - 42.))
             else:
                 last_extrude = "G1 E-20 F1000"
             if self.display:
@@ -159,8 +167,8 @@ class CustomGcode:
             self.gcode.respond_info("Cannot Tram during a print, aborting")
             return
         if self.tmc_z_endstop is None:
-           # TODO: Already Using TMC to home.  Just homing max, home
-           # to top, move up 10mm?
+            # TODO: Already Using TMC to home.  Just homing max, home
+            # to top, move up 10mm?
             return
         homing_max = self.z_rail.position_max
         speed = self.z_rail.homing_speed
@@ -170,7 +178,7 @@ class CustomGcode:
         home = homing.Homing(toolhead)
         home.home(start_pos, move_pos, [self.tmc_z_endstop], speed)
         toolhead.wait_moves()
-        #Move up 10mm for tramming
+        # Move up 10mm for tramming
         next_pos = toolhead.get_position()
         next_pos[2] += 10
         toolhead.move(next_pos, 10.)
@@ -179,6 +187,16 @@ class CustomGcode:
         toolhead.wait_moves()
         toolhead.motor_off()
         self.z_rail.position_max = homing_max
-     
+    cmd_M900_help = "Enable/Disable pressure advance"
+    def cmd_M900(self, params):
+        if 'K' in params:
+            pressure = self.gcode.get_int('K', params)
+            pa_gcode = "SET_PRESSURE_ADVANCE ADVANCE=%.4f"
+            if pressure:
+                self.gcode.run_script_from_command(
+                    pa_gcode % self.default_pressure)
+            else:
+                self.gcode.run_script_from_command(pa_gcode % 0.0)
+
 def load_config(config):
     return CustomGcode(config)
