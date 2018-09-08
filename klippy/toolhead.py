@@ -196,7 +196,8 @@ class ToolHead:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
-        self.all_mcus = self.printer.lookup_module_objects('mcu')
+        self.all_mcus = [
+            m for n, m in self.printer.lookup_objects(module='mcu')]
         self.mcu = self.all_mcus[0]
         self.move_queue = MoveQueue()
         self.commanded_pos = [0., 0., 0., 0.]
@@ -232,6 +233,7 @@ class ToolHead:
         self.flush_timer = self.reactor.register_timer(self._flush_handler)
         self.move_queue.set_flush_time(self.buffer_time_high)
         self.printer.try_load_module(config, "idle_timeout")
+        self.printer.try_load_module(config, "statistics")
         # Setup iterative solver
         ffi_main, ffi_lib = chelper.get_ffi()
         self.cmove = ffi_main.gc(ffi_lib.move_alloc(), ffi_lib.free)
@@ -243,6 +245,10 @@ class ToolHead:
         try:
             mod = importlib.import_module('kinematics.' + kin_name)
             self.kin = mod.load_kinematics(self, config)
+        except config.error as e:
+            raise
+        except self.printer.lookup_object('pins').error as e:
+            raise
         except:
             msg = "Error loading kinematics '%s'" % (kin_name,)
             logging.exception(msg)
@@ -444,7 +450,13 @@ class ToolHead:
         gcode.respond_info(msg)
     def cmd_M204(self, params):
         gcode = self.printer.lookup_object('gcode')
-        accel = gcode.get_float('S', params, above=0.)
+        if 'P' in params and 'T' in params and 'S' not in params:
+            # Use minimum of P and T for accel
+            accel = min(gcode.get_float('P', params, above=0.),
+                        gcode.get_float('T', params, above=0.))
+        else:
+            # Use S for accel
+            accel = gcode.get_float('S', params, above=0.)
         self.max_accel = min(accel, self.config_max_accel)
         self._calc_junction_deviation()
 
