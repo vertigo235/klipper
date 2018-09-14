@@ -96,7 +96,13 @@ class GCodeParser:
         return False, "gcodein=%d" % (self.bytes_read,)
     def get_status(self, eventtime):
         busy = self.is_processing_data
-        return {'speed_factor': self.speed_factor * 60., 'busy': busy}
+        return {
+            'speed_factor': self.speed_factor * 60.,
+            'busy': busy,
+            'x_offset': self.base_position[0],
+            'y_offset': self.base_position[1],
+            'z_offset': self.base_position[2],
+            'e_offset': self.base_position[3]}
     def printer_state(self, state):
         if state == 'shutdown':
             if not self.is_printer_ready:
