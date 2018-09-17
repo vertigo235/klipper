@@ -107,9 +107,10 @@ class CustomGcode:
         if self.display:
             self.display.set_message("Loading Filament...")
         self.gcode.run_script_from_command("M83")
-        self.gcode.run_script_from_command("G1 E0.0")
+        self.gcode.run_script_from_command("G92 E0.0")
         self.gcode.run_script_from_command(first_extrude)
         self.gcode.run_script_from_command("G1 E25 F100")
+        self.gcode.run_script_from_command("G92 E0.0")
         toolhead.wait_moves()
         if self.display:
             self.display.set_message("Load Complete", 5.)
@@ -127,7 +128,7 @@ class CustomGcode:
             if self.display:
                 self.display.set_message("Unloading Filament...")
             self.gcode.run_script_from_command("M83")
-            self.gcode.run_script_from_command("G1 E0.0")
+            self.gcode.run_script_from_command("G92 E0.0")
             self.gcode.run_script_from_command("G1 E-32 F5200")
             self.gcode.run_script_from_command("G1 E-10 F100")
             self.gcode.run_script_from_command(last_extrude)
@@ -139,10 +140,11 @@ class CustomGcode:
             if self.display:
                 self.display.set_message("Unloading Filament...")
             self.gcode.run_script_from_command("M83")
-            self.gcode.run_script_from_command("G1 E0.0")
+            self.gcode.run_script_from_command("G92 E0.0")
             self.gcode.run_script_from_command("G1 E-45 F5200")
             self.gcode.run_script_from_command("G1 E-15 F1000")
             self.gcode.run_script_from_command(last_extrude)
+        self.gcode.run_script_from_command("G92 E0.0")
         toolhead.wait_moves()
         toolhead.motor_off()
         if self.display:
