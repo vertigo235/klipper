@@ -98,11 +98,20 @@ class GCodeParser:
         busy = self.is_processing_data
         return {
             'speed_factor': self.speed_factor * 60.,
+            'extrude_factor': self.extrude_factor,
             'busy': busy,
-            'x_offset': self.base_position[0],
-            'y_offset': self.base_position[1],
-            'z_offset': self.base_position[2],
-            'e_offset': self.base_position[3]}
+            'last_xpos': self.last_position[0],
+            'last_ypos': self.last_position[1],
+            'last_zpos': self.last_position[2],
+            'last_epos': self.last_position[3],
+            'base_xpos': self.base_position[0],
+            'base_ypos': self.base_position[1],
+            'base_zpos': self.base_position[2],
+            'base_epos': self.base_position[3],
+            'homing_xpos': self.homing_position[0],
+            'homing_ypos': self.homing_position[1],
+            'homing_zpos': self.homing_position[2]
+        }
     def printer_state(self, state):
         if state == 'shutdown':
             if not self.is_printer_ready:
