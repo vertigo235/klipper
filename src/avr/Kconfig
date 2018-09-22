@@ -65,29 +65,22 @@ choice
         bool "8Mhz"
 endchoice
 
-if MACH_atmega1284p
+if MACH_atmega1284p || MACH_atmega2560
     choice
         prompt "Serial Port"
         config AVR_SERIAL_UART0
             bool "UART0"
         config AVR_SERIAL_UART1
             bool "UART1"
+        if MACH_atmega2560
+            config AVR_SERIAL_UART2
+                bool "UART2"
+            config AVR_SERIAL_UART3
+                bool "UART3"
+        endif
     endchoice
 endif
 
-if MACH_atmega2560
-    choice
-        prompt "Serial Port
-        config AVR_SERIAL_UART0
-            bool "UART0"
-        config AVR_SERIAL_UART1
-            bool "UART1"
-        config AVR_SERIAL_UART2
-            bool "UART2"
-        config AVR_SERIAL_UART3
-            bool "UART3"
-    endchoice
-endif
 config CLOCK_FREQ
     int
     default 8000000 if AVR_FREQ_8000000
