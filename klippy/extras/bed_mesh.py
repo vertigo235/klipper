@@ -275,7 +275,8 @@ class BedMeshCalibrate:
                 'max_point': (params['max_x'], params['max_y']),
                 'xy_offset': offsets[:2],
                 'z_positions': self.probed_z_table}
-            self.gcode.respond(json.dumps(outdict))
+            self.gcode.respond(
+                "mesh_map_output " + json.dumps(outdict))
         else:
             mesh = ZMesh(self.probe_params)
             try:
