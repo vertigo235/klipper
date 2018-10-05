@@ -121,7 +121,9 @@ class PrinterRail:
         mcu_endstop = ppins.setup_pin('endstop', config.get('endstop_pin'))
         self.endstops = [(mcu_endstop, self.name)]
         stepper.add_to_endstop(mcu_endstop)
-        if default_position_endstop is None:
+        if hasattr(mcu_endstop, "get_position_endstop"):
+            self.position_endstop = mcu_endstop.get_position_endstop()
+        elif default_position_endstop is None:
             self.position_endstop = config.getfloat('position_endstop')
         else:
             self.position_endstop = config.getfloat(
@@ -143,6 +145,7 @@ class PrinterRail:
                 " position_min and position_max" % config.get_name())
         # Homing mechanics
         self.homing_speed = config.getfloat('homing_speed', 5.0, above=0.)
+        self.second_homing_speed = config.getfloat('second_homing_speed', self.homing_speed/2., above=0.)
         self.homing_retract_dist = config.getfloat(
             'homing_retract_dist', 5., minval=0.)
         self.homing_positive_dir = config.getboolean(
@@ -218,9 +221,9 @@ class PrinterRail:
         return self.position_min, self.position_max
     def get_homing_info(self):
         homing_info = collections.namedtuple('homing_info', [
-            'speed', 'position_endstop', 'retract_dist', 'positive_dir'])(
+            'speed', 'position_endstop', 'retract_dist', 'positive_dir', 'second_homing_speed'])(
                 self.homing_speed, self.position_endstop,
-                self.homing_retract_dist, self.homing_positive_dir)
+                self.homing_retract_dist, self.homing_positive_dir, self.second_homing_speed)
         return homing_info
     def get_steppers(self):
         return list(self.steppers)

@@ -5,9 +5,7 @@
 # Copyright (C) 2018  Janar Sööt <janar.soot@gmail.com>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import os, ConfigParser, logging
-import sys, ast, re
-import klippy
+import os, logging, sys, ast, re
 
 
 class error(Exception):
@@ -782,7 +780,10 @@ class MenuVSDCard(MenuList):
                 self.append_item(MenuCommand(self._manager, {
                     'name': '%s' % str(fname),
                     'cursor': '+',
-                    'gcode': "\n".join(gcode)
+                    'gcode': "\n".join(gcode),
+                    'scroll': True,
+                    # mind the cursor size in width
+                    'width': (self._manager.cols-1)
                 }))
 
     def populate_items(self):
@@ -963,10 +964,9 @@ class MenuManager:
                                         desc=self.cmd_DO_help)
 
         # Parse local config file in same directory as current module
-        fileconfig = ConfigParser.RawConfigParser()
+        pconfig = self.printer.lookup_object('configfile')
         localname = os.path.join(os.path.dirname(__file__), 'menu.cfg')
-        fileconfig.read(localname)
-        localconfig = klippy.ConfigWrapper(self.printer, fileconfig, {}, None)
+        localconfig = pconfig.read_config(localname)
 
         # Load items from local config
         self.load_menuitems(localconfig)

@@ -187,9 +187,7 @@ class MoveQueue:
         move.calc_junction(self.queue[-2])
         self.junction_flush -= move.min_move_t
         if self.junction_flush <= 0.:
-            # There are enough queued moves to return to zero velocity
-            # from the first move's maximum possible velocity, so at
-            # least one move can be flushed.
+            # Enough moves have been queued to reach the target flush time.
             self.flush(lazy=True)
 
 STALL_TIME = 0.100
@@ -209,8 +207,7 @@ class ToolHead:
         self.max_accel = config.getfloat('max_accel', above=0.)
         self.requested_accel_to_decel = config.getfloat(
             'max_accel_to_decel', self.max_accel * 0.5, above=0.)
-        self.max_accel_to_decel = min(self.requested_accel_to_decel,
-                                      self.max_accel)
+        self.max_accel_to_decel = self.requested_accel_to_decel
         self.square_corner_velocity = config.getfloat(
             'square_corner_velocity', 5., minval=0.)
         self.config_max_velocity = self.max_velocity
@@ -423,6 +420,8 @@ class ToolHead:
     def _calc_junction_deviation(self):
         scv2 = self.square_corner_velocity**2
         self.junction_deviation = scv2 * (math.sqrt(2.) - 1.) / self.max_accel
+        self.max_accel_to_decel = min(self.requested_accel_to_decel,
+                                      self.max_accel)
     cmd_SET_VELOCITY_LIMIT_help = "Set printer velocity limits"
     def cmd_SET_VELOCITY_LIMIT(self, params):
         print_time = self.get_last_move_time()
@@ -440,7 +439,6 @@ class ToolHead:
             'ACCEL_TO_DECEL', params, self.requested_accel_to_decel, above=0.)
         self.max_velocity = max_velocity
         self.max_accel = max_accel
-        self.max_accel_to_decel = min(self.requested_accel_to_decel, max_accel)
         self.square_corner_velocity = square_corner_velocity
         self._calc_junction_deviation()
         msg = ("max_velocity: %.6f\n"

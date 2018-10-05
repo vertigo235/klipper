@@ -77,8 +77,10 @@ Klipper supports many standard 3d printer features:
   manipulating the Z steppers. Most Z height probes are supported,
   including servo activated probes.
 
-* Automatic delta calibration support. The calibration can be done
-  with a Z height probe or via manual probing.
+* Automatic delta calibration support. The calibration tool can
+  perform basic height calibration as well as an enhanced X and Y
+  dimension calibration. The calibration can be done with a Z height
+  probe or via manual probing.
 
 * Support for common temperature sensors (eg, common thermistors,
   AD595, PT100, MAX6675, MAX31855, MAX31856, MAX31865). Custom
@@ -90,9 +92,10 @@ Klipper supports many standard 3d printer features:
 * Support for standard fans, nozzle fans, and temperature controlled
   fans. No need to keep fans running when the printer is idle.
 
-* Support for run-time configuration of TMC2130, TMC2208, and TMC2224
-  stepper motor drivers. There is also support for current control of
-  traditional stepper drivers via AD5206 and MCP4451 digipots.
+* Support for run-time configuration of TMC2130, TMC2208, TMC2224, and
+  TMC2660 stepper motor drivers. There is also support for current
+  control of traditional stepper drivers via AD5206 and MCP4451
+  digipots.
 
 * Support for common LCD displays attached directly to the printer. A
   default menu is also available.
