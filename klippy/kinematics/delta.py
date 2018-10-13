@@ -23,6 +23,15 @@ class DeltaKinematics:
             stepper_configs[2], need_position_minmax = False,
             default_position_endstop=a_endstop)
         self.rails = [rail_a, rail_b, rail_c]
+        # Setup stepper max halt velocity
+        self.max_velocity, self.max_accel = toolhead.get_max_velocity()
+        self.max_z_velocity = config.getfloat(
+            'max_z_velocity', self.max_velocity,
+            above=0., maxval=self.max_velocity)
+        max_halt_velocity = toolhead.get_max_axis_halt() * SLOW_RATIO
+        max_halt_accel = self.max_accel * SLOW_RATIO
+        for rail in self.rails:
+            rail.set_max_jerk(max_halt_velocity, max_halt_accel)
         # Read radius and arm lengths
         self.radius = radius = config.getfloat('delta_radius', above=0.)
         arm_length_a = stepper_configs[0].getfloat('arm_length', above=radius)
@@ -33,26 +42,6 @@ class DeltaKinematics:
         self.abs_endstops = [(rail.get_homing_info().position_endstop
                               + math.sqrt(arm2 - radius**2))
                              for rail, arm2 in zip(self.rails, self.arm2)]
-        # Setup boundary checks
-        self.need_motor_enable = self.need_home = True
-        self.limit_xy2 = -1.
-        self.max_z = min([rail.get_homing_info().position_endstop
-                          for rail in self.rails])
-        self.min_z = config.getfloat('minimum_z_position', 0, maxval=self.max_z)
-        self.limit_z = min([ep - arm
-                            for ep, arm in zip(self.abs_endstops, arm_lengths)])
-        logging.info(
-            "Delta max build height %.2fmm (radius tapered above %.2fmm)" % (
-                self.max_z, self.limit_z))
-        # Setup stepper max halt velocity
-        self.max_velocity, self.max_accel = toolhead.get_max_velocity()
-        self.max_z_velocity = config.getfloat(
-            'max_z_velocity', self.max_velocity,
-            above=0., maxval=self.max_velocity)
-        max_halt_velocity = toolhead.get_max_axis_halt() * SLOW_RATIO
-        max_halt_accel = self.max_accel * SLOW_RATIO
-        for rail in self.rails:
-            rail.set_max_jerk(max_halt_velocity, max_halt_accel)
         # Determine tower locations in cartesian space
         self.angles = [sconfig.getfloat('angle', angle)
                        for sconfig, angle in zip(stepper_configs,
@@ -62,6 +51,19 @@ class DeltaKinematics:
                        for angle in self.angles]
         for r, a, t in zip(self.rails, self.arm2, self.towers):
             r.setup_itersolve('delta_stepper_alloc', a, t[0], t[1])
+        # Setup boundary checks
+        self.need_motor_enable = self.need_home = True
+        self.limit_xy2 = -1.
+        self.home_position = tuple(
+            self._actuator_to_cartesian(self.abs_endstops))
+        self.max_z = min([rail.get_homing_info().position_endstop
+                          for rail in self.rails])
+        self.min_z = config.getfloat('minimum_z_position', 0, maxval=self.max_z)
+        self.limit_z = min([ep - arm
+                            for ep, arm in zip(self.abs_endstops, arm_lengths)])
+        logging.info(
+            "Delta max build height %.2fmm (radius tapered above %.2fmm)" % (
+                self.max_z, self.limit_z))
         # Find the point where an XY move could result in excessive
         # tower movement
         half_min_step_dist = min([r.get_steppers()[0].get_step_dist()
@@ -75,10 +77,10 @@ class DeltaKinematics:
         self.very_slow_xy2 = (ratio_to_dist(2. * SLOW_RATIO) - radius)**2
         self.max_xy2 = min(radius, min_arm_length - radius,
                            ratio_to_dist(4. * SLOW_RATIO) - radius)**2
-        logging.info(
-            "Delta max build radius %.2fmm (moves slowed past %.2fmm and %.2fmm)"
-            % (math.sqrt(self.max_xy2), math.sqrt(self.slow_xy2),
-               math.sqrt(self.very_slow_xy2)))
+        logging.info("Delta max build radius %.2fmm (moves slowed past %.2fmm"
+                     " and %.2fmm)" % (
+                         math.sqrt(self.max_xy2), math.sqrt(self.slow_xy2),
+                         math.sqrt(self.very_slow_xy2)))
         self.set_position([0., 0., 0.], ())
     def get_steppers(self, flags=""):
         return [s for rail in self.rails for s in rail.get_steppers()]
@@ -97,26 +99,10 @@ class DeltaKinematics:
     def home(self, homing_state):
         # All axes are homed simultaneously
         homing_state.set_axes([0, 1, 2])
-        endstops = [es for rail in self.rails for es in rail.get_endstops()]
-        # Initial homing - assume homing speed same for all steppers
-        hi = self.rails[0].get_homing_info()
-        homing_speed = min(hi.speed, self.max_z_velocity)
-        second_homing_speed = min(hi.second_homing_speed, self.max_z_velocity)
-        homepos = [0., 0., self.max_z, None]
-        coord = list(homepos)
-        coord[2] = -1.5 * math.sqrt(max(self.arm2)-self.max_xy2)
-        homing_state.home(coord, homepos, endstops, homing_speed)
-        # Retract
-        coord[2] = homepos[2] - hi.retract_dist
-        homing_state.retract(coord, second_homing_speed)
-        # Home again
-        coord[2] -= hi.retract_dist
-        homing_state.home(coord, homepos, endstops,
-                          second_homing_speed, second_home=True)
-        # Set final homed position
-        spos = [ep + rail.get_homed_offset()
-                for ep, rail in zip(self.abs_endstops, self.rails)]
-        homing_state.set_homed_position(self._actuator_to_cartesian(spos))
+        forcepos = list(self.home_position)
+        forcepos[2] = -1.5 * math.sqrt(max(self.arm2)-self.max_xy2)
+        homing_state.home_rails(self.rails, forcepos, self.home_position,
+                                limit_speed=self.max_z_velocity)
     def motor_off(self, print_time):
         self.limit_xy2 = -1.
         for rail in self.rails:
@@ -137,7 +123,8 @@ class DeltaKinematics:
         limit_xy2 = self.max_xy2
         if end_pos[2] > self.limit_z:
             limit_xy2 = min(limit_xy2, (self.max_z - end_pos[2])**2)
-        if xy2 > limit_xy2 or end_pos[2] < self.min_z or end_pos[2] > self.max_z:
+        if (xy2 > limit_xy2 or end_pos[2] < self.min_z
+            or end_pos[2] > self.max_z) and end_pos[:3] != self.home_position:
             raise homing.EndstopMoveError(end_pos)
         if move.axes_d[2]:
             move.limit_speed(self.max_z_velocity, move.accel)
