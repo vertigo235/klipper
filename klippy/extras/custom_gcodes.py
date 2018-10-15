@@ -6,7 +6,7 @@
 import logging
 import homing
 
-TMC_REG_COOLCONF=0x6d
+TMC_REG_COOLCONF = 0x6d
 
 class CustomGcode:
     def __init__(self, config):
@@ -48,7 +48,7 @@ class CustomGcode:
                     help_attr = getattr(self, "cmd_" + key + "_help")
                 except:
                     raise config.error("Gcode [%s] Not supported" % (key))
-                self.gcode.register_command(key, command_func, 
+                self.gcode.register_command(key, command_func,
                                             desc=help_attr)
                 logging.info("Extended gcode " + key + " enabled")
         self.beeper_off_timer = self.reactor.register_timer(self._beeper_off)
@@ -94,7 +94,7 @@ class CustomGcode:
     cmd_LOAD_FILAMENT_help = "Load filament into Extruder"
     def cmd_LOAD_FILAMENT(self, params):
         # TODO: use buttons to ask if load should continue
-        self.gcode.respond_info("Load Filament for extruder: %s" 
+        self.gcode.respond_info("Load Filament for extruder: %s"
                                 % self.extruder_type)
         if self.extruder_type == "skelestruder":
             def_len = 85.
@@ -116,7 +116,7 @@ class CustomGcode:
             self.display.set_message("Load Complete", 5.)
     cmd_UNLOAD_FILAMENT_help = "Unload filament from Extruder"
     def cmd_UNLOAD_FILAMENT(self, params):
-        self.gcode.respond_info("Load Filament for extruder: %s" 
+        self.gcode.respond_info("Load Filament for extruder: %s"
                                 % self.extruder_type)
         toolhead = self.printer.lookup_object('toolhead')
         length = self.gcode.get_float('LENGTH', params, 80., minval=42.)
@@ -175,10 +175,23 @@ class CustomGcode:
         homing_max = self.z_rail.position_max
         speed = self.z_rail.homing_speed
         self.z_rail.position_max = 230.
-        start_pos = [None, None, self.z_rail.position_min, None]
-        move_pos = [None, None, 220.0, None]
+        cur_pos = toolhead.get_position()
+        start_pos = list(cur_pos)
+        move_pos = list(cur_pos)
+        start_pos[2] = self.z_rail.position_min
+        move_pos[2] = 220.0
+        toolhead.set_position(start_pos, homing_axes=[2])
+        move_d = abs(220.0 - self.z_rail.position_min)
+        est_steps = sum([move_d / s.get_step_dist()
+                        for s in self.z_rail.get_steppers()])
+        dwell_t = est_steps * homing.HOMING_STEP_DELAY
         home = homing.Homing(toolhead)
-        home.home(start_pos, move_pos, [self.tmc_z_endstop], speed)
+        try:
+            home.homing_move(move_pos, [self.tmc_z_endstop], speed,
+                             dwell_t=dwell_t)
+        except homing.EndstopError as e:
+            reason = str(e)
+            raise self.gcode.error(reason)
         toolhead.wait_moves()
         # Move up 10mm for tramming
         next_pos = toolhead.get_position()
