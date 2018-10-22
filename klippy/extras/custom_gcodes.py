@@ -8,13 +8,27 @@ import homing
 
 TMC_REG_COOLCONF = 0x6d
 
+class GCodeTimer:
+    def __init__(self, reactor, gcode, script, delay):
+        self.reactor = reactor
+        self.gcode = gcode
+        self.script = script
+        delay_time = reactor.monotonic() + delay
+        self.timer = reactor.register_timer(self.invoke, delay_time)
+    def invoke(self, eventtime):
+        self.reactor.unregister_timer(self.timer)
+        self.gcode.run_script_from_command(self.script)
+        return self.reactor.NEVER
+
 class CustomGcode:
     def __init__(self, config):
         self.supported_gcodes = {
-            'LOAD_FILAMENT': True,
-            'UNLOAD_FILAMENT': True,
+            'LOAD_FILAMENT': False,
+            'UNLOAD_FILAMENT': False,
             'SET_BEEPER': True,
             'M900': True,
+            'TIMED_GCODE': True,
+            'FINISH_MOVES': True,
             'TRAM_Z': False}
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
@@ -35,7 +49,16 @@ class CustomGcode:
             self.default_pressure = e_config.getfloat(
                 'pressure_advance', 0., minval=0.)
         self.extruder_type = config.get(
-            "extruder_type", "prusa").strip().lower()
+            "extruder_type", None)
+        if self.extruder_type is not None:
+            if self.extruder_type in ["prusa", "skelestruder"]:
+                self.extruder_type = self.extruder_type.strip().lower()
+                self.supported_gcodes['LOAD_FILAMENT'] = True
+                self.supported_gcodes['UNLOAD_FILAMENT'] = True
+            else:
+                raise config.error(
+                    "custom_gcodes: unknow extruder type <%s>"
+                    % self.extruder_type)
         self.tmc_z_endstop = None
         self.z_rail = None
         self._setup_virtual_z_endstop(config)
@@ -185,7 +208,7 @@ class CustomGcode:
         est_steps = sum([move_d / s.get_step_dist()
                         for s in self.z_rail.get_steppers()])
         dwell_t = est_steps * homing.HOMING_STEP_DELAY
-        home = homing.Homing(toolhead)
+        home = homing.Homing(self.printer)
         try:
             home.homing_move(move_pos, [self.tmc_z_endstop], speed,
                              dwell_t=dwell_t)
@@ -212,6 +235,18 @@ class CustomGcode:
                     pa_gcode % self.default_pressure)
             else:
                 self.gcode.run_script_from_command(pa_gcode % 0.0)
+    cmd_TIMED_GCODE_help = "Run GCODE script from a timer"
+    def cmd_TIMED_GCODE(self, params):
+        script = self.gcode.get_str('GCODE', params)
+        delay_time = self.gcode.get_int('DELAY', params, 0, minval=0)
+        # TODO: Instead of a simple underscore, replace with ability
+        # to use escape chars (possibly regex)
+        script = script.replace('_', " ")
+        GCodeTimer(self.reactor, self.gcode, script, delay_time)
+    cmd_FINISH_MOVES_help = "Wait for all moves to complete before next gcode"
+    def cmd_FINISH_MOVES(self, params):
+        toolhead = self.printer.lookup_object('toolhead')
+        toolhead.wait_moves()
 
 def load_config(config):
     return CustomGcode(config)
