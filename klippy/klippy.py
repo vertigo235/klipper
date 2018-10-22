@@ -58,6 +58,7 @@ class Printer:
         self.is_shutdown = False
         self.run_result = None
         self.state_cb = [gc.printer_state]
+        self.event_handlers = {}
     def get_start_args(self):
         return self.start_args
     def get_reactor(self):
@@ -135,12 +136,12 @@ class Printer:
             self._read_config()
             for cb in self.state_cb:
                 if self.state_message is not message_startup:
-                    return self.reactor.NEVER
+                    return
                 cb('connect')
             self._set_state(message_ready)
             for cb in self.state_cb:
                 if self.state_message is not message_ready:
-                    return self.reactor.NEVER
+                    return
                 cb('ready')
         except (self.config_error, pins.error) as e:
             logging.exception("Config error")
@@ -155,7 +156,6 @@ class Printer:
             logging.exception("Unhandled exception during connect")
             self._set_state("Internal error during connect.%s" % (
                 message_restart,))
-        return self.reactor.NEVER
     def run(self):
         systime = time.time()
         monotime = self.reactor.monotonic()
@@ -188,6 +188,10 @@ class Printer:
     def invoke_async_shutdown(self, msg):
         self.reactor.register_async_callback(
             (lambda e: self.invoke_shutdown(msg)))
+    def register_event_handler(self, event, callback):
+        self.event_handlers.setdefault(event, []).append(callback)
+    def send_event(self, event, *params):
+        return [cb(*params) for cb in self.event_handlers.get(event, [])]
     def request_exit(self, result):
         self.run_result = result
         self.reactor.end()

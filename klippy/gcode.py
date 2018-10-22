@@ -513,7 +513,7 @@ class GCodeParser:
                 axes.append(self.axis2pos[axis])
         if not axes:
             axes = [0, 1, 2]
-        homing_state = homing.Homing(self.toolhead)
+        homing_state = homing.Homing(self.printer)
         if self.is_fileinput:
             homing_state.set_no_verify_retract()
         try:
@@ -667,7 +667,6 @@ class GCodeParser:
                 gcode_pos, base_pos, homing_pos))
     def request_restart(self, result):
         if self.is_printer_ready:
-            self.respond_info("Preparing to restart...")
             self.toolhead.motor_off()
             print_time = self.toolhead.get_last_move_time()
             for heater in self.heaters:
@@ -696,7 +695,7 @@ class GCodeParser:
             self._respond_state("Ready")
             return
         msg = self.printer.get_state_message()
-        self._respond_state("Not ready")
+        msg = msg.rstrip() + "\nKlipper state: Not ready"
         self.respond_error(msg)
     cmd_HELP_when_not_ready = True
     def cmd_HELP(self, params):

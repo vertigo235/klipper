@@ -10,8 +10,9 @@ ENDSTOP_SAMPLE_TIME = .000015
 ENDSTOP_SAMPLE_COUNT = 4
 
 class Homing:
-    def __init__(self, toolhead):
-        self.toolhead = toolhead
+    def __init__(self, printer):
+        self.printer = printer
+        self.toolhead = printer.lookup_object('toolhead')
         self.changed_axes = []
         self.verify_retract = True
     def set_no_verify_retract(self):
@@ -123,14 +124,14 @@ class Homing:
             self.toolhead.set_position(forcepos)
             self.homing_move(movepos, endstops, second_homing_speed,
                              verify_movement=self.verify_retract)
-        # Apply homing offsets
-        for rail in rails:
-            cp = rail.get_commanded_position()
-            rail.set_commanded_position(cp + rail.get_homed_offset())
-        adjustpos = self.toolhead.get_kinematics().calc_position()
-        for axis in homing_axes:
-            movepos[axis] = adjustpos[axis]
-        self.toolhead.set_position(movepos)
+        # Signal home operation complete
+        ret = self.printer.send_event("homing:homed_rails", self, rails)
+        if any(ret):
+            # Apply any homing offsets
+            adjustpos = self.toolhead.get_kinematics().calc_position()
+            for axis in homing_axes:
+                movepos[axis] = adjustpos[axis]
+            self.toolhead.set_position(movepos)
     def home_axes(self, axes):
         self.changed_axes = axes
         try:

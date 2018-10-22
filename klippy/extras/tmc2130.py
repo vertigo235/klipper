@@ -277,6 +277,10 @@ class TMC2130:
         msg = self._set_wave(gcode.get_float('FACTOR', params))
         gcode.respond_info(msg)
     cmd_DUMP_TMC_help = "Read and display TMC2130 registers"
+    def get_microsteps(self):
+        return 256 >> self.mres
+    def get_phase(self):
+        return (self.get_register("MSCNT") & 0x3ff) >> self.mres
     cmd_DUMP_TMC_help = "Read and display TMC stepper driver registers"
     def cmd_DUMP_TMC(self, params):
         self.printer.lookup_object('toolhead').get_last_move_time()
