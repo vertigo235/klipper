@@ -20,27 +20,20 @@ class GCodeTimer:
         self.gcode.run_script_from_command(self.script)
         return self.reactor.NEVER
 
-class CustomGcode:
+class PrusaGcodes:
     def __init__(self, config):
         self.supported_gcodes = {
             'LOAD_FILAMENT': False,
             'UNLOAD_FILAMENT': False,
-            'SET_BEEPER': True,
-            'M900': True,
+            'M900': False,
             'TIMED_GCODE': True,
-            'FINISH_MOVES': True,
             'TRAM_Z': False}
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         mcu = self.printer.lookup_object('mcu')
         mcu.register_config_callback(self.build_config)
-        gcodes = config.get('enabled_gcodes', None)
-        if gcodes is not None:
-            gcodes = gcodes.split('\n')
-            for gc in gcodes:
-                gc = gc.strip()
-                if gc and gc in self.supported_gcodes:
-                    self.supported_gcodes[gc] = True
+        self.supported_gcodes['M900'] = config.getboolean(
+            'enable_M900', False)
         # TODO: the correct way to do this is to get the pressure
         # for each extruder if there are multiples
         self.default_pressure = 0.
@@ -74,7 +67,6 @@ class CustomGcode:
                 self.gcode.register_command(key, command_func,
                                             desc=help_attr)
                 logging.info("Extended gcode " + key + " enabled")
-        self.beeper_off_timer = self.reactor.register_timer(self._beeper_off)
     def printer_state(self, state):
         if state == 'ready':
             try:
@@ -105,15 +97,6 @@ class CustomGcode:
                     'endstop', 'tmc2130_stepper_z:virtual_endstop')
                 self.tmc_z_endstop = (es, "tmc2130_z_endstop")
                 self.supported_gcodes['TRAM_Z'] = True
-    def _beeper_off(self, eventtime):
-        self.gcode.run_script_from_command("SET_PIN PIN=beeper VALUE=0")
-        return self.reactor.NEVER
-    cmd_SET_BEEPER_help = "Toggle beeper on for provided duration (default 1s)"
-    def cmd_SET_BEEPER(self, params):
-        duration = self.gcode.get_float('DURATION', params, 1., above=.1)
-        self.gcode.run_script_from_command("SET_PIN PIN=beeper VALUE=1")
-        waketime = self.reactor.monotonic() + duration
-        self.reactor.update_timer(self.beeper_off_timer, waketime)
     cmd_LOAD_FILAMENT_help = "Load filament into Extruder"
     def cmd_LOAD_FILAMENT(self, params):
         # TODO: use buttons to ask if load should continue
@@ -243,10 +226,6 @@ class CustomGcode:
         # to use escape chars (possibly regex)
         script = script.replace('_', " ")
         GCodeTimer(self.reactor, self.gcode, script, delay_time)
-    cmd_FINISH_MOVES_help = "Wait for all moves to complete before next gcode"
-    def cmd_FINISH_MOVES(self, params):
-        toolhead = self.printer.lookup_object('toolhead')
-        toolhead.wait_moves()
 
 def load_config(config):
-    return CustomGcode(config)
+    return PrusaGcodes(config)
