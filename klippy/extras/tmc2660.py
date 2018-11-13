@@ -82,7 +82,7 @@ class TMC2660:
         self.name = config.get_name().split()[1]
         self.toolhead = None
 
-        # pin setup
+        # Generic setup
         ppins = self.printer.lookup_object("pins")
         cs_pin = config.get('cs_pin')
         cs_pin_params = ppins.lookup_pin(cs_pin)
@@ -91,24 +91,22 @@ class TMC2660:
             raise pins.error("tmc2660 can not invert pin")
         pin = cs_pin_params['pin']
         self.oid = self.mcu.create_oid()
-        # Add SET_CURRENT command
-        gcode = self.printer.lookup_object("gcode")
-        gcode.register_mux_command(
-            "SET_TMC_CURRENT", "STEPPER", self.name,
-            self.cmd_SET_TMC_CURRENT, desc=self.cmd_SET_TMC_CURRENT_help)
-        # Setup driver registers
         self.bus = config.getint('bus', minval=0, maxval=3)
         self.freq = config.getint('freq', default=2000000, minval=1000000, maxval=4000000)
         self.mcu.add_config_cmd(
             "config_spi oid=%d bus=%d pin=%s mode=%d rate=%d shutdown_msg=" % (
                 self.oid, self.bus, cs_pin_params['pin'], 0, self.freq))
-
         self.spi_send_cmd = self.spi_transfer_cmd = None
         self.mcu.register_config_callback(self.build_config)
-
-        self.idle_current_percentage = config.getint('idle_current_percent', default=30, minval=0, maxval=100)
-        self.idle_timeout = config.getfloat('idle_timeout', default=0., minval=0)
-        self.is_idle = False
+        # Add SET_CURRENT and DUMP_TMC commands
+        gcode = self.printer.lookup_object("gcode")
+        gcode.register_mux_command(
+            "SET_TMC_CURRENT", "STEPPER", self.name,
+            self.cmd_SET_TMC_CURRENT, desc=self.cmd_SET_TMC_CURRENT_help)
+        gcode.register_mux_command(
+            "DUMP_TMC", "STEPPER", self.name,
+            self.cmd_DUMP_TMC, desc=self.cmd_DUMP_TMC_help)
+        # Setup driver registers
         # DRVCTRL
         steps = {'256': 0, '128': 1, '64': 2, '32': 3, '16': 4,
                  '8': 5, '4': 6, '2': 7, '1': 8}
@@ -162,8 +160,7 @@ class TMC2660:
         self.driver_sdoff = False # since we don't support SPI mode yet, this has to be False
         vsense = {'low': 0, 'high': 1}
         self.driver_vsense = config.getchoice('driver_VSENSE', vsense, default='high')
-        self.driver_rdsel = 2  # stallguard2 and coolstep current level
-
+        self.driver_rdsel = 0  # Microsteps (used by endstop phase)
 
         # Build and send registers
         self.reg_drvconf =  REG_DRVCONF | \
@@ -207,6 +204,14 @@ class TMC2660:
                            get_bits(SMARTEN, "SEMIN", self.driver_semin)
         self.add_config_cmd(self.reg_smarten)
 
+        # Idle timeout
+        self.idle_current_percentage = config.getint('idle_current_percent', default=100, minval=0, maxval=100)
+        if self.idle_current_percentage < 100:
+            self.printer.register_event_handler("idle_timeout:printing",
+                                                self.handle_printing)
+            self.printer.register_event_handler("idle_timeout:ready",
+                                                self.handle_ready)
+
     def add_config_cmd(self, val):
         self.mcu.add_config_cmd("spi_send oid=%d data=%06x" % (
             self.oid, val & 0xffffff))
@@ -218,52 +223,53 @@ class TMC2660:
         self.spi_transfer_cmd = self.mcu.lookup_command(
             "spi_transfer oid=%c data=%*s", cq=cmd_queue)
 
-    # register timeout handler which will lower the current to current * idle_current_percent / 100 after idle_timeout seconds
-    # and raise it back to current if the printer needs to move the steppers
-    def printer_state(self, state):
-        if state == 'ready' and self.idle_timeout > 0:
-            self.toolhead = self.printer.lookup_object('toolhead')
-            reactor = self.printer.get_reactor()
-            reactor.register_timer(self.idle_timeout_handler, reactor.NOW)
+    def get_microsteps(self):
+        return 256 >> self.driver_mres
 
-    # timeout handler to lower/raise current when entering/leaving the idle state
-    def idle_timeout_handler(self, eventtime):
-        info = self.toolhead.get_status(eventtime)
-        status = info['status']
-        print_time = info['print_time']
-        if status == 'Printing':
-            if self.is_idle:
-                self.set_current(self.current)
-                self.is_idle = False
-            return eventtime + self.idle_timeout
-        estimated_print_time = info['estimated_print_time']
-        elapsed_time = estimated_print_time - print_time
-        if elapsed_time < self.idle_timeout:
-            if self.is_idle:
-                self.set_current(self.current)
-                self.is_idle = False
-            return eventtime + self.idle_timeout - elapsed_time
-        if not self.is_idle:
-            self.set_current(float(self.idle_current_percentage) * self.current / 100)
-            self.is_idle = True
-        return eventtime + 0.1
+    def get_phase(self):
+        # Send DRVCTRL to get a response
+        reg_data = [(self.reg_drvctrl >> 16) & 0xff, (self.reg_drvctrl >> 8) & 0xff, self.reg_drvctrl & 0xff]
+        params = self.spi_transfer_cmd.send_with_response([self.oid, reg_data], 'spi_transfer_response', self.oid)
+        pr = bytearray(params['response'])
+        steps = (((pr[0] << 16) | (pr[1] << 8) | pr[2]) & READRSP['MSTEP'][1]) >> READRSP['MSTEP'][0]
+        return steps >> self.driver_mres
 
-    def set_current(self, current):
+    def handle_printing(self, print_time):
+        self.set_current(print_time, self.current)
+
+    def handle_ready(self, print_time):
+        self.set_current(print_time, float(self.idle_current_percentage) * self.current / 100)
+
+    def set_current(self, print_time, current):
         self.driver_cs = current_to_reg(current)
         reg = self.reg_sgcsconf
         reg &= ~(SGCSCONF["CS"][1])
         reg |= get_bits(SGCSCONF, "CS", self.driver_cs)
         reg_data = [(reg >> 16) & 0xff, (reg >> 8) & 0xff, reg & 0xff]
-        params = self.spi_transfer_cmd.send_with_response([self.oid, reg_data], 'spi_transfer_response', self.oid)
+        clock = self.mcu.print_time_to_clock(print_time)
+        params = self.spi_send_cmd.send([self.oid, reg_data], minclock=clock, reqclock=clock)
 
     cmd_SET_TMC_CURRENT_help = "Set the current of a TMC2660 driver (between %d and %d)" % (CURRENT_MIN, CURRENT_MAX)
     def cmd_SET_TMC_CURRENT(self, params):
-        self.printer.lookup_object('toolhead').get_last_move_time()
         gcode = self.printer.lookup_object('gcode')
         if 'CURRENT' in params:
             self.current = gcode.get_float('CURRENT', params, minval=CURRENT_MIN, maxval=CURRENT_MAX)
-            if not self.is_idle:
-                self.set_current(self.current)
+            self.set_current(self.printer.lookup_object('toolhead').get_last_move_time(), self.current)
+
+    cmd_DUMP_TMC_help = "Read and display TMC stepper driver registers"
+    def cmd_DUMP_TMC(self, params):
+        self.printer.lookup_object('toolhead').get_last_move_time()
+        gcode = self.printer.lookup_object('gcode')
+        for reg_name , val in zip(["DRVCONF", "DRVCTRL", "CHOPCONF", "SGCSCONF", "SMARTEN"],
+                            [self.reg_drvconf, self.reg_drvctrl, self.reg_chopconf, self.reg_sgcsconf, self.reg_smarten]):
+            msg = "%-15s %08x" % (reg_name + " (cached):", val)
+            gcode.respond_info(msg)
+        # Send one register to get the return data
+        reg_data = [(self.reg_drvctrl >> 16) & 0xff, (self.reg_drvctrl >> 8) & 0xff, self.reg_drvctrl & 0xff]
+        params = self.spi_transfer_cmd.send_with_response([self.oid, reg_data], 'spi_transfer_response', self.oid)
+        pr = bytearray(params['response'])
+        msg = "%-15s %08x" % ("RESPONSE:", ((pr[0] << 16) | (pr[1] << 8) | pr[2]))
+        gcode.respond_info(msg)
 
 def load_config_prefix(config):
     return TMC2660(config)
