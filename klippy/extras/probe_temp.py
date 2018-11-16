@@ -154,15 +154,15 @@ class ProbeTemp:
         if temp_acheived:
             self.set_z_adjustment()
 
-#TODO: It will soon be possible
+
 class ProbeCalibrationHelper:
     def __init__(self, config, probetemp):
         self.sensor = probetemp
         self.printer = self.sensor.printer
         self.gcode = self.sensor.gcode
         self.display = None
-        stepper_config = config.getsection('stepper_z')
-        self.z_offset = stepper_config.getfloat('position_endstop')
+        probe_config = config.getsection('probe')
+        self.z_offset = probe_config.getfloat('z_offset')
         self.gcode.register_command(
             'CALIBRATE_PROBE_TEMP', self.cmd_CALIBRATE_PROBE_TEMP, 
             desc=self.cmd_CALIBRATE_PROBE_TEMP_help)
