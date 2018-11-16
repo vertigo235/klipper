@@ -36,9 +36,16 @@
 #define USARTx_UDRE_vect AVR_SERIAL_REG(USART, CONFIG_SERIAL_PORT, _UDRE_vect)
 #endif
 
+#define PRUSA_FIX
+
 void
 serial_init(void)
 {
+#ifdef PRUSA_FIX
+    // Disable UARTS
+    UCSR0B = 0;
+    UCSR2B = 0;
+#endif
     UCSRxA = CONFIG_SERIAL_BAUD_U2X ? (1<<U2Xx) : 0;
     uint32_t cm = CONFIG_SERIAL_BAUD_U2X ? 8 : 16;
     UBRRx = DIV_ROUND_CLOSEST(CONFIG_CLOCK_FREQ, cm * CONFIG_SERIAL_BAUD) - 1UL;
