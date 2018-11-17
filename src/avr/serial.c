@@ -44,6 +44,7 @@ serial_init(void)
 #ifdef PRUSA_FIX
     // Disable UARTS
     UCSR0B = 0;
+    UCSR1B = 0;
     UCSR2B = 0;
 #endif
     UCSRxA = CONFIG_SERIAL_BAUD_U2X ? (1<<U2Xx) : 0;
