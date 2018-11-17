@@ -41,24 +41,30 @@ class ProbeTemp:
                     config.get_name()))
         self.sensor = None
         self.sensor_temp = 0.
-        self.z_offset = 0.
+        self.offset_applied = 0.
         if self.sensor_type in thermistor.Sensors:
             params = thermistor.Sensors[self.sensor_type]
             self.sensor = thermistor.Thermistor(config, params)
             self.sensor.setup_minmax(0., 100.)
             self.sensor.setup_callback(self.temperature_callback)
         self.gcode.register_command(
-            'GET_PROBE_TEMP', self.cmd_GET_PROBE_TEMP, desc=self.cmd_GET_PROBE_TEMP_help)
+            'GET_PROBE_TEMP', self.cmd_GET_PROBE_TEMP,
+            desc=self.cmd_GET_PROBE_TEMP_help)
         self.gcode.register_command(
-            'PROBE_WAIT', self.cmd_PROBE_WAIT, desc=self.cmd_PROBE_WAIT_help)
+            'PROBE_WAIT', self.cmd_PROBE_WAIT,
+            desc=self.cmd_PROBE_WAIT_help)
+        self.gcode.register_command(
+            'APPLY_TEMP_OFFSET', self.cmd_APPLY_TEMP_OFFSET,
+            desc=self.cmd_APPLY_TEMP_OFFSET_help)
     def printer_state(self, state):
         if state == 'ready':
             self.cal_helper.printer_state(state)
             self.toolhead = self.printer.lookup_object('toolhead')
             if self.sensor is None:
-                # A sensor was added to config but not found in the default sensor dictoinary.
-                # Check to see if it is a custom thermistor.
-                custom_thermistor = self.printer.lookup_object(self.sensor_type)
+                # A sensor was added to config but not found in the default
+                # sensor dictionary. Check to see if it is a custom thermistor.
+                custom_thermistor = self.printer.lookup_object(
+                    self.sensor_type)
                 self.sensor = custom_thermistor.create(self.config)
                 if self.sensor:
                     self.sensor.setup_minmax(0., 100.)
@@ -74,29 +80,33 @@ class ProbeTemp:
         if self.probe_offsets:
             last_idx = len(self.probe_offsets) - 1
             if offset_temp <= self.probe_offsets[0][0]:
-                # Don't attempt to interpolate above or below
+                # Clamp offsets below minimum temperature to 0
                 return 0.
             elif offset_temp >= self.probe_offsets[last_idx][0]:
                 return self.probe_offsets[last_idx][1]
             else:
-                # Interpolate between points, not over the entire curve, because the
-                # change is not linear across all temperatures
+                # Interpolate between points, not over the entire curve,
+                # because the change is not linear across all temperatures
                 for index in range(last_idx):
                     if offset_temp > self.probe_offsets[index][0] and \
                        offset_temp <= self.probe_offsets[index+1][0]:
-                        temp_delta = self.probe_offsets[index+1][0] - self.probe_offsets[index][0]
-                        t = (offset_temp - self.probe_offsets[index][0]) / (temp_delta)
+                        temp_delta = self.probe_offsets[index+1][0] \
+                            - self.probe_offsets[index][0]
+                        t = (offset_temp - self.probe_offsets[index][0]) \
+                            / (temp_delta)
                         return (1. - t) * self.probe_offsets[index][1] + \
-                               t * self.probe_offsets[index+1][1]
-            self.gcode.respond_error("probe_temp: unable to retrieve offset from probe temperature")
+                            t * self.probe_offsets[index+1][1]
+            self.gcode.respond_error(
+                "probe_temp: unable to retrieve offset from probe temperature")
             return 0.
         else:
             return 0.
     def set_z_adjustment(self):
-        new_offset =  self.get_probe_offset()
-        z_adj = self.z_offset - new_offset
-        self.z_offset = new_offset
-        self.gcode.run_script_from_command("SET_GCODE_OFFSET Z_ADJUST=%.4f" % (z_adj))
+        new_offset = self.get_probe_offset()
+        z_adj = self.offset_applied - new_offset
+        self.offset_applied = new_offset
+        self.gcode.run_script_from_command(
+            "SET_GCODE_OFFSET Z_ADJUST=%.4f" % (z_adj))
     def pause_for_temp(self, target_temp, timeout=300, heat_up=True):
         total_time = 0
         if heat_up:
@@ -125,34 +135,29 @@ class ProbeTemp:
         e_status = extruder.get_status(eventtime)
         b_status = bed.get_status(eventtime)
         return e_status['target'] > 0., b_status['target'] > 0.
-    cmd_GET_PROBE_TEMP_help = "Return the probe temperature if it has a thermistor"
+    cmd_GET_PROBE_TEMP_help = "Return the probe temperature"
     def cmd_GET_PROBE_TEMP(self, params):
-        self.gcode.respond_info("Probe Temperature: %.2f" % (self.get_current_temp()))
-    cmd_PROBE_WAIT_help = "Pause until the probe thermistor reaches a temperature"
+        self.gcode.respond_info(
+            "Probe Temperature: %.2f" % (self.get_current_temp()))
+    cmd_PROBE_WAIT_help = "Pause until the probe reaches a temperature"
     def cmd_PROBE_WAIT(self, params):
         extr_on, bed_on = self._get_heater_status()
-        wait_temp = self.gcode.get_float('TEMP', params, 35., minval=25., maxval=65.)
+        wait_temp = self.gcode.get_float(
+            'TEMP', params, 35., minval=20., maxval=70.)
         timeout = self.gcode.get_int('TIMEOUT', params, 0, minval=0) * 60
-        direction = self.gcode.get_str('DIRECTION', params, 'up').lower()
-        temp_acheived = True
-        if direction == 'down' or direction == 'cool':
-            if extr_on or bed_on:
-                # Heaters are on, we can't wait
-                self.gcode.respond_info("Heaters are on, please disable "
-                                        "before attempting to wait for probe to cool.")
-                return
+        # direction = self.gcode.get_str('DIRECTION', params, 'up').lower()
+        probe_cooling = not extr_on and not bed_on
+        if probe_cooling:
             temp_acheived = self.pause_for_temp(wait_temp, timeout, False)
-        elif direction == 'up' or direction == 'heat':
-            if not extr_on and not bed_on:
-                # Heaters are off, we can't wait
-                self.gcode.respond_info("Heaters are off, please enable "
-                                        "before attempting to wait for probe to heat.")
-                return
-            temp_acheived = self.pause_for_temp(wait_temp, timeout)
         else:
-            return
+            temp_acheived = self.pause_for_temp(wait_temp, timeout)
         if temp_acheived:
-            self.set_z_adjustment()
+            self.gcode.respond_info("Pinda Temp Acheived")
+        else:
+            self.gcode.respond_info("Wait for Pinda Temp Timed Out")
+    cmd_APPLY_TEMP_OFFSET_help = "Apply a gcode offset based on the probe's temperature"
+    def cmd_APPLY_TEMP_OFFSET(self, params):
+        self.set_z_adjustment()
 
 
 class ProbeCalibrationHelper:
