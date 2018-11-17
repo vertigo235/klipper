@@ -34,6 +34,7 @@ class TMC2130:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.name = config.get_name().split()[1]
+        self._stepper = None
         # pin setup
         ppins = self.printer.lookup_object("pins")
         cs_pin = config.get('cs_pin')
@@ -57,6 +58,9 @@ class TMC2130:
         gcode.register_mux_command(
             "TMC_SET_WAVE", "STEPPER", self.name,
             self.cmd_TMC_SET_WAVE, desc=self.cmd_TMC_SET_WAVE_help)
+        gcode.register_mux_command(
+            "TMC_SET_STEP", "STEPPER", self.name,
+            self.cmd_TMC_SET_STEP)
         # Get config for initial driver settings
         run_current = config.getfloat('run_current', above=0., maxval=2.)
         hold_current = config.getfloat('hold_current', run_current,
@@ -84,13 +88,20 @@ class TMC2130:
         pwm_grad = config.getint('driver_PWM_GRAD', 4, minval=0, maxval=255)
         pwm_ampl = config.getint('driver_PWM_AMPL', 128, minval=0, maxval=255)
         # calculate current
-        vsense = False
-        irun = self.current_bits(run_current, sense_resistor, vsense)
-        ihold = self.current_bits(hold_current, sense_resistor, vsense)
-        if irun < 16 and ihold < 16:
-            vsense = True
+        vsense = config.getboolean('driver_VSENSE', None)
+        if vsense is None:
+            # Auto Calculate Vsense
+            vsense = False
             irun = self.current_bits(run_current, sense_resistor, vsense)
             ihold = self.current_bits(hold_current, sense_resistor, vsense)
+            if irun < 16 and ihold < 16:
+                vsense = True
+                irun = self.current_bits(run_current, sense_resistor, vsense)
+                ihold = self.current_bits(hold_current, sense_resistor, vsense)
+        else:
+            irun = self.current_bits(run_current, sense_resistor, vsense)
+            ihold = self.current_bits(hold_current, sense_resistor, vsense)
+
         # Configure registers
         self.reg_GCONF = stealth_enable << 2
         self.set_register("GCONF", self.reg_GCONF)
@@ -133,6 +144,23 @@ class TMC2130:
             "spi_send oid=%c data=%*s", cq=cmd_queue)
         self.spi_transfer_cmd = self.mcu.lookup_command(
             "spi_transfer oid=%c data=%*s", cq=cmd_queue)
+    def printer_state(self, state):
+        # TODO: It might be better to look up the correct stepper
+        # in the TMC_SET_STEP gcode rather than store it initially
+        if state == "ready":
+            toolhead = self.printer.lookup_object('toolhead')
+            if self.name == 'extruder':
+                self._stepper = toolhead.get_extruder().stepper
+                logging.info("TMC2130 %s: Stepper Found" % (self.name))
+            else:
+                steppers = toolhead.get_kinematics().get_steppers()
+                for s in steppers:
+                    if s.get_name() == self.name:
+                        self._stepper = s
+                        logging.info("TMC2130 %s: Stepper Found" % (self.name))
+                        break
+                if self._stepper is None:
+                    logging.info("TMC2130 %s: Stepper NOT Found" % (self.name))
     def get_register(self, reg_name):
         reg = Registers[reg_name]
         self.spi_send_cmd.send([self.oid, [reg, 0x00, 0x00, 0x00, 0x00]])
@@ -151,6 +179,10 @@ class TMC2130:
         data = [(reg | 0x80) & 0xff, (val >> 24) & 0xff, (val >> 16) & 0xff,
                 (val >> 8) & 0xff, val & 0xff]
         self.spi_send_cmd.send([self.oid, data])
+    def get_microsteps(self):
+        return 256 >> self.mres
+    def get_phase(self):
+        return (self.get_register("MSCNT") & 0x3ff) >> self.mres
     def _set_default_wave(self):
         # default wave regs from page 79 of TMC2130 datasheet
         msg = "TMC2130: Wave factor on stepper [%s] set to default" % (self.name)
@@ -177,7 +209,7 @@ class TMC2130:
         if fac == 0.:
             # default wave
             self._set_default_wave()
-            return
+            return "Wave Set To Default"
         error = None
         vA = 0
         prevA = 0
@@ -276,11 +308,52 @@ class TMC2130:
         gcode = self.printer.lookup_object('gcode')
         msg = self._set_wave(gcode.get_float('FACTOR', params))
         gcode.respond_info(msg)
-    cmd_DUMP_TMC_help = "Read and display TMC2130 registers"
-    def get_microsteps(self):
-        return 256 >> self.mres
-    def get_phase(self):
-        return (self.get_register("MSCNT") & 0x3ff) >> self.mres
+    def cmd_TMC_SET_STEP(self, params):
+        force_move = self.printer.lookup_object('force_move')
+        params = {'STEPPER': self.name}
+        gcode = self.printer.lookup_object('gcode')
+        if self._stepper is None:
+            logging.info(
+                "TMC2130 %s: No stepper assigned, cannot step" 
+                % (self.name))
+            gcode.respond_info("Unable to move stepper, unknown stepper ID")
+            return
+        elif self._stepper.need_motor_enable:
+            gcode.respond_info("Cannot Move, motors off")
+            return
+        max_step = 4 * self.get_microsteps()
+        target_step = gcode.get_int('STEP', params, 0, minval=0)
+        target_step &= (max_step - 1)
+        toolhead = self.printer.lookup_object('toolhead')
+        toolhead.wait_moves()
+        steps = target_step - self.get_phase()
+        # TODO: figure out the shortest distance.  Direction will be
+        # negative or positive, Force Move will use that to determine
+        # Which way to step the stepper
+        direction = 1
+        if steps < 0:
+            direction = -1
+            steps *= -1
+        if steps > (max_step / 2):
+            direction = -1
+            steps = max_step - steps
+        distance = self._stepper.get_step() * steps * direction
+        mcu_pos = self._stepper.get_commanded_position()
+        # Move stepper to requested step in sine wave table
+        params['DISTANCE'] = distance
+        params['VELOCITY'] = 5
+        force_move.cmd_FORCE_MOVE(params)
+        toolhead.wait_moves()
+        self._stepper.set_commanded_position(mcu_pos)
+        # Check MSCNT
+        phase = self.get_phase()
+        if phase != target_step:
+            gcode.respond_info("Unable to move to correct step")
+            logging.info(
+                "TMC2130 %s: TMC_SET_STEP Invalid MSCNT: %d, Target: %d" %
+                (self.name, phase, target_step))
+        else:
+            gcode.respond_info("Correctly moved to step %d:" % target_step)
     cmd_DUMP_TMC_help = "Read and display TMC stepper driver registers"
     def cmd_DUMP_TMC(self, params):
         self.printer.lookup_object('toolhead').get_last_move_time()
