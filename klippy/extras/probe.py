@@ -141,7 +141,11 @@ class ProbePointsHelper:
         # Internal probing state
         self.results = []
         self.busy = False
-        self.gcode = self.toolhead = None
+        self.gcode = self.toolhead = self.probe_temp = None
+        if config.getboolean('enable_temp_offset', False):
+            if config.has_section('probe_temp'):
+                self.probe_temp = self.printer.try_load_module(
+                    config, 'probe_temp')
     def get_lift_speed(self):
         return self.lift_speed
     def _lift_z(self, z_pos, add=False, speed=None):
@@ -192,6 +196,8 @@ class ProbePointsHelper:
                 self._lift_z(self.sample_retract_dist, add=True)
         avg_pos = [sum([pos[i] for pos in positions]) / self.samples
                    for i in range(3)]
+        if self.probe_temp is not None:
+            avg_pos[2] -= self.probe_temp.get_probe_offset()
         self.results.append(avg_pos)
     def start_probe(self, params):
         # Lookup objects
