@@ -77,14 +77,15 @@ class HD44780:
                 self.send(new_data[pos:pos+count], is_data=True)
             old_data[:] = new_data
     def init(self):
+        # Program 4bit / 2-line mode and then issue 0x02 "Home" command
+        init = [[0x33], [0x33], [0x33], [0x22], [0x28],
+                [0x08], [0x01], [0x06], [0x02], [0x0c]]
+        delays = [.1, .01, .001] + [.005 for i in range(7)]
         curtime = self.printer.get_reactor().monotonic()
         print_time = self.mcu.estimated_print_time(curtime)
-        # Program 4bit / 2-line mode and then issue 0x02 "Home" command
-        init = [[0x33], [0x33], [0x33, 0x22, 0x28, 0x02]]
-        # Reset (set positive direction ; enable display and hide cursor)
-        init.append([0x06, 0x0c])
         for i, cmds in enumerate(init):
-            minclock = self.mcu.print_time_to_clock(print_time + i * .100)
+            print_time += delays[i]
+            minclock = self.mcu.print_time_to_clock(print_time)
             self.send_cmds_cmd.send([self.oid, cmds], minclock=minclock)
         # Add custom fonts
         self.glyph_framebuffer[:len(HD44780_chars)] = HD44780_chars
