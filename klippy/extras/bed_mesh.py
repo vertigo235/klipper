@@ -53,9 +53,6 @@ class BedMesh:
     FADE_DISABLE = 0x7FFFFFFF
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.bed_skew = None
-        if config.has_section('bed_skew'):
-            self.bed_skew = self.printer.try_load_module(config, 'bed_skew')
         self.last_position = [0., 0., 0., 0.]
         self.calibrate = BedMeshCalibrate(config, self)
         self.z_mesh = None
@@ -74,7 +71,13 @@ class BedMesh:
         self.gcode.register_command(
             'BED_MESH_CLEAR', self.cmd_BED_MESH_CLEAR,
             desc=self.cmd_BED_MESH_CLEAR_help)
-        self.gcode.set_move_transform(self)
+        self.bed_skew = None
+        if config.has_section('bed_skew'):
+            self.bed_skew = self.printer.try_load_module(
+                config, 'bed_skew')
+            self.bed_skew.set_downstream_transform(self)
+        else:
+            self.gcode.set_move_transform(self)
     def printer_state(self, state):
         if state == 'connect':
             self.toolhead = self.printer.lookup_object('toolhead')
@@ -84,12 +87,12 @@ class BedMesh:
         # is applied
         self.z_mesh = mesh
         self.splitter.set_mesh(mesh)
-        # cache the current position before a mesh transform takes place
-        self.last_position[:] = self.toolhead.get_position()
+        # cache the current position after mesh data has changed
+        self.gcode.reset_last_position()
         if self.bed_skew is not None:
-            # Remove skew correction if set
-            self.last_position[:] = self.bed_skew.calc_unskew(
-                self.last_position)
+            # if bedskew is in use then the cached position must
+            # included skewed coordinates
+            self.last_position[:] = self.bed_skew.get_position()
     def get_z_factor(self, z_pos):
         if z_pos >= self.fade_end:
             return 0.
@@ -107,29 +110,14 @@ class BedMesh:
             x, y, z, e = self.toolhead.get_position()
             z_adjust = self.get_z_factor(z) * self.z_mesh.get_z(x, y)
             self.last_position[:] = [x, y, z - z_adjust, e]
-        if self.bed_skew is not None:
-            # Remove skew correction if set
-            self.last_position[:] = self.bed_skew.calc_unskew(
-                self.last_position)
         return list(self.last_position)
     def move(self, newpos, speed):
         factor = self.get_z_factor(newpos[2])
         if self.z_mesh is None or not factor:
             # No mesh calibrated, or mesh leveling phased out.
-            if self.bed_skew is None:
-                # no skew
-                self.toolhead.move(newpos, speed)
-            else:
-                # add skew compensation
-                self.toolhead.move(
-                    self.bed_skew.calc_skew(newpos), speed)
+            self.toolhead.move(newpos, speed)
         else:
-            if self.bed_skew is None:
-                self.splitter.build_move(self.last_position, newpos, factor)
-            else:
-                last_pos = self.bed_skew.calc_skew(self.last_position)
-                next_pos = self.bed_skew.calc_skew(newpos)
-                self.splitter.build_move(last_pos, next_pos, factor)
+            self.splitter.build_move(self.last_position, newpos, factor)
             while not self.splitter.traverse_complete:
                 split_move = self.splitter.split()
                 if split_move:

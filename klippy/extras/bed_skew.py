@@ -14,6 +14,7 @@ class BedSkew:
     SUPPORTED_KINEMATICS = {'cartesian', 'corexy'}
     def __init__(self, config):
         self.printer = config.get_printer()
+        self.toolhead = None
         kin_type = config.getsection('printer').get('kinematics')
         if kin_type not in self.SUPPORTED_KINEMATICS:
             raise config.error(
@@ -28,9 +29,17 @@ class BedSkew:
         y_config = config.getsection('stepper_y')
         self.y_min = y_config.getfloat('position_min', 0.)
         self.y_max = y_config.getfloat('position_max')
+        gcode = self.printer.lookup_object('gcode')
+        gcode.set_move_transform(self)
+        self.downstream_transform = None
+    def printer_state(self, state):
+        if state == 'connect':
+            self.toolhead = self.printer.lookup_object('toolhead')
     def _check_pos_range(self, pos, min_offset=0):
         return ((self.x_min + min_offset) <= pos[0] <= self.x_max) and \
                ((self.y_min + min_offset)) <= pos[1] < self.y_max
+    def set_downstream_transform(self, transform):
+        self.downstream_transform = transform
     def calc_skew(self, pos):
         if self._check_pos_range(pos, 1):
             skewed_x = pos[0] - pos[1] * self.xy_factor \
@@ -49,6 +58,18 @@ class BedSkew:
             if self._check_pos_range(new_pos):
                 return new_pos
         return pos
+    def get_position(self):
+        if self.downstream_transform is None:
+            cur_pos = self.toolhead.get_position()
+        else:
+            cur_pos = self.downstream_transform.get_position()
+        return self.calc_unskew(cur_pos)
+    def move(self, newpos, speed):
+        next_pos = self.calc_skew(newpos)
+        if self.downstream_transform is None:
+            self.toolhead.move(next_pos, speed)
+        else:
+            self.downstream_transform.move(next_pos, speed)
 
 def load_config(config):
     return BedSkew(config)
