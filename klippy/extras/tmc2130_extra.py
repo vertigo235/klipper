@@ -187,7 +187,7 @@ class TMC2130_EXTRA:
         gcode.respond_info(msg)
     def cmd_TMC_SET_STEP(self, params):
         force_move = self.printer.lookup_object('force_move')
-        params = {'STEPPER': self.name}
+        move_params = {'STEPPER': self.name}
         gcode = self.printer.lookup_object('gcode')
         if self._stepper is None:
             logging.info(
@@ -212,14 +212,14 @@ class TMC2130_EXTRA:
             direction = -1
             steps *= -1
         if steps > (max_step / 2):
-            direction = -1
+            direction *= -1
             steps = max_step - steps
-        distance = self._stepper.get_step() * steps * direction
+        distance = self._stepper.get_step_dist() * steps * direction
         mcu_pos = self._stepper.get_commanded_position()
         # Move stepper to requested step in sine wave table
-        params['DISTANCE'] = distance
-        params['VELOCITY'] = 5
-        force_move.cmd_FORCE_MOVE(params)
+        move_params['DISTANCE'] = distance
+        move_params['VELOCITY'] = 5
+        force_move.cmd_FORCE_MOVE(move_params)
         toolhead.wait_moves()
         self._stepper.set_commanded_position(mcu_pos)
         # Check MSCNT
