@@ -203,13 +203,17 @@ class TMC2130_EXTRA:
         target_step &= (max_step - 1)
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.wait_moves()
-        steps = target_step - self.get_phase()
-        # TODO: figure out the shortest distance.  Direction will be
-        # negative or positive, Force Move will use that to determine
-        # Which way to step the stepper
-        direction = 1
+        phase = self.get_phase()
+        steps = target_step - phase
+        logging.info(
+            "TMC_SET_STEP Initial values: target step: %d, phase: %d, steps to move: %d"
+            % (target_step, phase, steps))
+        # TODO: Accessing a private member is a no-no, but I have no choice.  I need
+        # to know the step direction. Maybe I can find another place to get this,
+        # perhaps from the config
+        direction = 1 if self._stepper.mcu_stepper._invert_dir else -1
         if steps < 0:
-            direction = -1
+            direction *= -1
             steps *= -1
         if steps > (max_step / 2):
             direction *= -1
