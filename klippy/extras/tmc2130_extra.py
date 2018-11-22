@@ -82,10 +82,10 @@ class TMC2130_EXTRA:
             fac = 0.0
         elif fac > TMC_WAVE_FACTOR_MAX:
             fac = TMC_WAVE_FACTOR_MAX
-        if fac == 0.:
+        # if fac == 0.:
             # default wave
-            self._set_default_wave()
-            return "Wave Set To Default"
+        #    self._set_default_wave()
+        #    return "Wave Set To Default"
         error = None
         vA = 0
         prevA = 0
@@ -102,9 +102,12 @@ class TMC2130_EXTRA:
         for i in range(256):
             if (i & 31) == 0:
                 reg = 0
-            # Prusa corrected wave
-            vA = int(
-                TMC_WAVE_AMP * math.pow(math.sin(2*math.pi*i/1024), fac) + .5)
+            if fac == 0.:
+                vA = int((TMC_WAVE_AMP + 1) * math.sin((2*math.pi*i + math.pi)/1024) + .5) - 1
+            else:
+                # Prusa corrected wave
+                vA = int(
+                    TMC_WAVE_AMP * math.pow(math.sin(2*math.pi*i/1024), fac) + .5)
             deltaA = vA - prevA
             prevA = vA
             bitVal = -1
