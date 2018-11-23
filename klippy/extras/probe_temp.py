@@ -107,26 +107,28 @@ class ProbeTemp:
         self.offset_applied = new_offset
         self.gcode.run_script_from_command(
             "SET_GCODE_OFFSET Z_ADJUST=%.4f" % (z_adj))
-    def pause_for_temp(self, target_temp, timeout=300, heat_up=True):
+    def pause_for_temp(self, target_temp, timeout=300,
+                       compare=lambda x, y: x <= y):
         total_time = 0
-        if heat_up:
-            while self.get_current_temp() <= target_temp:
-                self.pause_for_time(1)
-                total_time += 1
-                if timeout and total_time >= timeout:
+        while compare(self.get_current_temp(), target_temp):
+            total_time += 1
+            if timeout:
+                remaining = timeout - total_time
+                self.pause_for_time(1, target_temp, remaining)
+                if remaining <= 0:
                     return False
-        else:
-            while self.get_current_temp() >= target_temp:
-                self.pause_for_time(1)
-                total_time += 1
-                if timeout and total_time >= timeout:
-                    return False
-        return True
-    def pause_for_time(self, dwell_time):
+            else:
+                self.pause_for_time(1, target_temp)
+    def pause_for_time(self, dwell_time, target=None, time_remaining=None):
         for i in range(dwell_time):
             self.toolhead.dwell(1.)
             self.toolhead.wait_moves()
-            self.gcode.respond("Probe Temp: %.2f" % (self.get_current_temp()))
+            msg = "Probe Temp: %.2f" % (self.get_current_temp())
+            if target is not None:
+                msg += " /%.2f" % (target)
+            if time_remaining is not None:
+                msg += " Time Remaining: %d seconds" % (time_remaining)
+            self.gcode.respond_info(msg)
     def _get_heater_status(self):
         extruder = self.toolhead.get_extruder().get_heater()
         bed = self.printer.lookup_object('heater_bed')
@@ -144,15 +146,16 @@ class ProbeTemp:
         extr_on, bed_on = self._get_heater_status()
         wait_temp = self.gcode.get_float(
             'TEMP', params, 35., minval=20., maxval=70.)
-        timeout = self.gcode.get_int('TIMEOUT', params, 0, minval=0) * 60
+        timeout = self.gcode.get_int('TIMEOUT', params, 0, minval=0)
         # direction = self.gcode.get_str('DIRECTION', params, 'up').lower()
         probe_cooling = not extr_on and not bed_on
         if probe_cooling:
-            temp_acheived = self.pause_for_temp(wait_temp, timeout, False)
+            temp_acheived = self.pause_for_temp(
+                wait_temp, timeout, compare=lambda x, y: x >= y)
         else:
             temp_acheived = self.pause_for_temp(wait_temp, timeout)
         if temp_acheived:
-            self.gcode.respond_info("Pinda Temp Acheived")
+            self.gcode.respond_info("Pinda Temp Achieved")
         else:
             self.gcode.respond_info("Wait for Pinda Temp Timed Out")
     cmd_APPLY_TEMP_OFFSET_help = "Apply a gcode offset based on the probe's temperature"
