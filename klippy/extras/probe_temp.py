@@ -119,6 +119,7 @@ class ProbeTemp:
                     return False
             else:
                 self.pause_for_time(1, target_temp)
+        return True
     def pause_for_time(self, dwell_time, target=None, time_remaining=None):
         for i in range(dwell_time):
             self.toolhead.dwell(1.)
