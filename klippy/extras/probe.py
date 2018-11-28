@@ -197,7 +197,7 @@ class ProbePointsHelper:
         avg_pos = [sum([pos[i] for pos in positions]) / self.samples
                    for i in range(3)]
         if self.probe_temp is not None:
-            avg_pos[2] -= self.probe_temp.get_probe_offset()
+            avg_pos[2] += self.probe_temp.get_probe_offset()
         self.results.append(avg_pos)
     def start_probe(self, params):
         # Lookup objects

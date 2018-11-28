@@ -14,6 +14,10 @@ Z_LIFT = 5.
 Z_SPEED = 10.
 TIMEOUT = 180
 
+# Linear interpolation between two values
+def lerp(t, v0, v1):
+    return (1. - t) * v0 + t * v1
+
 class ProbeTemp:
     def __init__(self, config):
         self.config = config
@@ -39,6 +43,9 @@ class ProbeTemp:
             if len(self.probe_offsets) < 2:
                 raise config.error("Need at least 2 points for %s" % (
                     config.get_name()))
+        logging.info("Probe offsets generated:")
+        for temp, offset in self.probe_offsets:
+            logging.info("(%.2fC,%.4f)" % (temp, offset))
         self.sensor = None
         self.sensor_temp = 0.
         self.offset_applied = 0.
@@ -94,8 +101,12 @@ class ProbeTemp:
                             - self.probe_offsets[index][0]
                         t = (offset_temp - self.probe_offsets[index][0]) \
                             / (temp_delta)
-                        return (1. - t) * self.probe_offsets[index][1] + \
-                            t * self.probe_offsets[index+1][1]
+                        offset = lerp(t, self.probe_offsets[index][1],
+                                      self.probe_offsets[index+1][1])
+                        self.gcode.respond_info(
+                            "[probe_temp] Current Temp: %.2f, Calculated Offset: %.4f"
+                            % (offset_temp, offset))
+                        return offset
             self.gcode.respond_error(
                 "probe_temp: unable to retrieve offset from probe temperature")
             return 0.
@@ -103,7 +114,7 @@ class ProbeTemp:
             return 0.
     def set_z_adjustment(self):
         new_offset = self.get_probe_offset()
-        z_adj = self.offset_applied - new_offset
+        z_adj = new_offset - self.offset_applied
         self.offset_applied = new_offset
         self.gcode.run_script_from_command(
             "SET_GCODE_OFFSET Z_ADJUST=%.4f" % (z_adj))
