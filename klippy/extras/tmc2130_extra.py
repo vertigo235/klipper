@@ -38,6 +38,9 @@ class TMC2130_EXTRA:
         gcode.register_mux_command(
             "TMC_SET_STEP", "STEPPER", self.name,
             self.cmd_TMC_SET_STEP)
+        gcode.register_mux_command(
+            "TMC_SET_CURRENT", "STEPPER", self.name,
+            self.cmd_TMC_SET_CURRENT, desc=self.cmd_TMC_SET_CURRENT_help)
         wave_factor = config.getfloat('linearity_correction', 0.,
                                       minval=0., maxval=1.2)
         self._set_wave(wave_factor)
@@ -183,6 +186,12 @@ class TMC2130_EXTRA:
                           (self.name, fac)
             logging.info(success_msg)
             return success_msg
+    cmd_TMC_SET_CURRENT_help = "Set the current applied to a stepper"
+    def cmd_TMC_SET_CURRENT(self, params):
+        gcode = self.printer.lookup_object('gcode')
+        rc = gcode.get_float('RUN', params, above=0., below=2.)
+        hc = gcode.get_float('HOLD', params, rc, above=0., below=2.)
+        self.tmc2130.set_current_regs(rc, hc)
     cmd_TMC_SET_WAVE_help = "Set wave correction factor for TMC2130 driver"
     def cmd_TMC_SET_WAVE(self, params):
         gcode = self.printer.lookup_object('gcode')
