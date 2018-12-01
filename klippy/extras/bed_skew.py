@@ -61,9 +61,12 @@ class BedSkew:
     def get_position(self):
         if self.downstream_transform is None:
             cur_pos = self.toolhead.get_position()
+            u_pos = self.calc_unskew(cur_pos)
         else:
             cur_pos = self.downstream_transform.get_position()
-        return self.calc_unskew(cur_pos)
+            u_pos = self.calc_unskew(cur_pos)
+            self.downstream_transform.update_position(u_pos)
+        return u_pos
     def move(self, newpos, speed):
         next_pos = self.calc_skew(newpos)
         if self.downstream_transform is None:

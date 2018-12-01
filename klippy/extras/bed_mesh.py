@@ -73,11 +73,10 @@ class BedMesh:
         self.gcode.register_command(
             'BED_MESH_CLEAR', self.cmd_BED_MESH_CLEAR,
             desc=self.cmd_BED_MESH_CLEAR_help)
-        self.bed_skew = None
         if config.has_section('bed_skew'):
-            self.bed_skew = self.printer.try_load_module(
+            bed_skew = self.printer.try_load_module(
                 config, 'bed_skew')
-            self.bed_skew.set_downstream_transform(self)
+            bed_skew.set_downstream_transform(self)
         else:
             self.gcode.set_move_transform(self)
     def printer_state(self, state):
@@ -107,10 +106,8 @@ class BedMesh:
         self.splitter.initialize(mesh, self.fade_target)
         # cache the current position after mesh data has changed
         self.gcode.reset_last_position()
-        if self.bed_skew is not None:
-            # if bedskew is in use then the cached position must
-            # included skewed coordinates
-            self.last_position[:] = self.bed_skew.get_position()
+    def update_position(self, pos):
+        self.last_position[:] = pos
     def get_z_factor(self, z_pos):
         if z_pos >= self.fade_end:
             return 0.
