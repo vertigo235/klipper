@@ -22,6 +22,7 @@ Registers = {
 }
 
 class TMC2130_EXTRA:
+    GCODES = ["SET_WAVE", "SET_STEP", "SET_CURRENT", "SET_STEALTH"]
     def __init__(self, config, tmc2130):
         self.printer = config.get_printer()
         self._stepper = None
@@ -32,15 +33,15 @@ class TMC2130_EXTRA:
         self.set_register = tmc2130.set_register
         self.get_register = tmc2130.get_register
         gcode = self.printer.lookup_object("gcode")
-        gcode.register_mux_command(
-            "TMC_SET_WAVE", "STEPPER", self.name,
-            self.cmd_TMC_SET_WAVE, desc=self.cmd_TMC_SET_WAVE_help)
-        gcode.register_mux_command(
-            "TMC_SET_STEP", "STEPPER", self.name,
-            self.cmd_TMC_SET_STEP)
-        gcode.register_mux_command(
-            "TMC_SET_CURRENT", "STEPPER", self.name,
-            self.cmd_TMC_SET_CURRENT, desc=self.cmd_TMC_SET_CURRENT_help)
+        for gc in self.GCODES:
+            tmc_gc = "TMC_" + gc
+            try:
+                command_func = getattr(self, "cmd_" + tmc_gc)
+                help_attr = getattr(self, "cmd_" + tmc_gc + "_help")
+            except:
+                raise config.error("TMC Gcode [%s] Not supported" % (tmc_gc))
+            gcode.register_mux_command(
+                tmc_gc, "STEPPER", self.name, command_func, desc=help_attr)
         wave_factor = config.getfloat('linearity_correction', 0.,
                                       minval=0., maxval=1.2)
         self._set_wave(wave_factor)
@@ -192,11 +193,28 @@ class TMC2130_EXTRA:
         rc = gcode.get_float('RUN', params, above=0., below=2.)
         hc = gcode.get_float('HOLD', params, rc, above=0., below=2.)
         self.tmc2130.set_current_regs(rc, hc)
+    cmd_TMC_SET_STEALTH_help = "Toggle stealtchop mode"
+    def cmd_TMC_SET_STEALTH(self, params):
+        gcode = self.printer.lookup_object('gcode')
+        enable = gcode.get_str('ENABLE', params, None)
+        thrs = gcode.get_str('THRESHOLD', params, None)
+        if enable is not None:
+            enable = enable.upper()
+            if enable not in ["TRUE", "FALSE"]:
+                gcode.respond_info("Unknown value for ENABLE, aborting")
+                return
+            self.tmc2130.reg_GCONF &= ~(1 << 2)
+            if enable == "TRUE":
+                self.tmc2130.reg_GCONF |= (1 << 2)
+            self.set_register("GCONF", self.tmc2130.reg_GCONF)
+        if thrs is not None:
+            self.set_register("TPWMTHRS", max(0, min(0xfffff, thrs)))
     cmd_TMC_SET_WAVE_help = "Set wave correction factor for TMC2130 driver"
     def cmd_TMC_SET_WAVE(self, params):
         gcode = self.printer.lookup_object('gcode')
         msg = self._set_wave(gcode.get_float('FACTOR', params))
         gcode.respond_info(msg)
+    cmd_TMC_SET_STEP_help = "Force a stepper to a specified step"
     def cmd_TMC_SET_STEP(self, params):
         force_move = self.printer.lookup_object('force_move')
         move_params = {'STEPPER': self.name}

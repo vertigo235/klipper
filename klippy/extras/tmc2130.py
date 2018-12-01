@@ -63,7 +63,7 @@ class TMC2130:
         stealth_enable = config.getboolean('stealthchop_enable', False)
         # Configure registers
         self.reg_GCONF = stealth_enable << 2
-        self.reg_CHOP_CONF = (toff | (hstrt << 4) | (hend << 7) | 
+        self.reg_CHOP_CONF = (toff | (hstrt << 4) | (hend << 7) |
                               (blank_time_select << 15) | (self.mres << 24) |
                               (interpolate << 28))
         self.set_register("GCONF", self.reg_GCONF)
@@ -90,9 +90,10 @@ class TMC2130:
         else:
             vsense = self.vsense
             irun, ihold = get_bits(run_current, hold_current, self.vsense)
-        chop_conf = self.reg_CHOP_CONF | (vsense << 17)
+        self.reg_CHOP_CONF &= ~(1 << 17)
+        self.reg_CHOP_CONF |= (vsense << 17)
         ihold_irun = ihold | (irun << 8) | (self.iholddelay << 16)
-        self.set_register("CHOPCONF", chop_conf)
+        self.set_register("CHOPCONF", self.reg_CHOP_CONF)
         self.set_register("IHOLD_IRUN", ihold_irun)
     def current_bits(self, current, sense_resistor, vsense_on):
         sense_resistor += 0.020
@@ -166,15 +167,15 @@ class TMC2130VirtualEndstop:
         gconf &= ~GCONF_EN_PWM_MODE
         gconf |= GCONF_DIAG1_STALL
         self.tmc2130.set_register("GCONF", gconf)
-        self.tmc2130.set_register("TCOOLTHRS", 0xfffff)
         self.tmc2130.set_current_regs(
             self.tmc2130.homing_current, self.tmc2130.hold_current)
+        self.tmc2130.set_register("TCOOLTHRS", 0xfffff)
         self.mcu_endstop.home_prepare()
     def home_finalize(self):
         self.tmc2130.set_register("GCONF", self.tmc2130.reg_GCONF)
-        self.tmc2130.set_register("TCOOLTHRS", 0)
         self.tmc2130.set_current_regs(
             self.tmc2130.run_current, self.tmc2130.hold_current)
+        self.tmc2130.set_register("TCOOLTHRS", 0)
         self.mcu_endstop.home_finalize()
 
 def load_config_prefix(config):
