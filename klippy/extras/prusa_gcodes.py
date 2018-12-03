@@ -32,6 +32,8 @@ class PrusaGcodes:
         self.reactor = self.printer.get_reactor()
         mcu = self.printer.lookup_object('mcu')
         mcu.register_config_callback(self.build_config)
+        self.tram_current = config.getfloat(
+            'tram_current', None)
         self.supported_gcodes['M900'] = config.getboolean(
             'enable_M900', False)
         # TODO: the correct way to do this is to get the pressure
@@ -169,6 +171,7 @@ class PrusaGcodes:
             self.gcode.respond_info("Unable to locate z-rail, aborting")
             return
         toolhead = self.printer.lookup_object('toolhead')
+        z_tmc2130 = self.printer.lookup_object('tmc2130 stepper_z')
         event_time = self.reactor.monotonic()
         status = toolhead.get_status(event_time)
         if status['status'] == "Printing":
@@ -199,6 +202,9 @@ class PrusaGcodes:
             reason = str(e)
             raise self.gcode.error(reason)
         toolhead.wait_moves()
+        if self.tram_current is not None:
+            z_tmc2130.set_current_regs(
+                self.tram_current, z_tmc2130.hold_current)
         # Move up 10mm for tramming
         next_pos = toolhead.get_position()
         next_pos[2] += 10
@@ -207,6 +213,9 @@ class PrusaGcodes:
         toolhead.move(next_pos, 10.)
         toolhead.wait_moves()
         toolhead.motor_off()
+        if self.tram_current is not None:
+            z_tmc2130.set_current_regs(
+                z_tmc2130.run_current, z_tmc2130.hold_current)
         self.z_rail.position_max = homing_max
     cmd_M900_help = "Enable/Disable pressure advance"
     def cmd_M900(self, params):
