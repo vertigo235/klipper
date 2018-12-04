@@ -21,6 +21,29 @@ class ConfigWrapper:
         return self.printer
     def get_name(self):
         return self.section
+    def _check_math(self, parser, option):
+        if parser == self.fileconfig.getint:
+            cast = int
+        elif parser == self.fileconfig.getfloat:
+            cast = float
+        else:
+            return None
+        try:
+            v = self.fileconfig.get(self.section, option)
+            if v[0] != "(" and v[-1] != ")":
+                raise Exception
+            # XXX - probably need a safer parser than eval.  I could
+            # use a regular expression to make sure only numbers
+            # and math related operators exist in the string
+            import __future__
+            exp = compile(v[1:-1], '<string>', 'eval',
+                          __future__.division.compiler_flag)
+            val = cast(eval(exp))
+        except self.error as e:
+            raise
+        except:
+            return None
+        return val
     def _get_wrapper(self, parser, option, default,
                      minval=None, maxval=None, above=None, below=None):
         if (default is not sentinel
@@ -32,8 +55,10 @@ class ConfigWrapper:
         except self.error as e:
             raise
         except:
-            raise error("Unable to parse option '%s' in section '%s'" % (
-                option, self.section))
+            v = self._check_math(parser, option)
+            if v is None:
+                raise error("Unable to parse option '%s' in section '%s'" % (
+                    option, self.section))
         if minval is not None and v < minval:
             raise error(
                 "Option '%s' in section '%s' must have minimum of %s" % (
