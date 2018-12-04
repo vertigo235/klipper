@@ -1,4 +1,4 @@
-# Test case for probe:z_virtual_endstop support
+# Test case for bltouch support
 CONFIG bltouch.cfg
 DICTIONARY atmega2560-16mhz.dict
 
@@ -10,6 +10,10 @@ G1 F6000
 G1 Z1
 G1 X1
 G1 Y1
+
+# Run BLTOUCH_DEBUG
+BLTOUCH_DEBUG
+BLTOUCH_DEBUG COMMAND=reset
 
 # Run bed_mesh_calibrate
 BED_MESH_CALIBRATE
