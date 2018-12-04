@@ -150,8 +150,11 @@ class BedMesh:
         if self.z_mesh is None:
             self.gcode.respond_info("Bed has not been probed")
         else:
+            offset_mesh = bool(self.gcode.get_int(
+                'CENTER_ZERO', params, 0, minval=0, maxval=1))
             self.calibrate.print_probed_positions(self.gcode.respond_info)
-            self.z_mesh.print_mesh(self.gcode.respond, self.horizontal_move_z)
+            self.z_mesh.print_mesh(
+                self.gcode.respond, self.horizontal_move_z, offset_mesh)
     cmd_BED_MESH_CLEAR_help = "Clear the Mesh so no z-adjusment is made"
     def cmd_BED_MESH_CLEAR(self, params):
         self.set_mesh(None)
@@ -506,8 +509,15 @@ class ZMesh:
                            (self.mesh_x_count - 1)
         self.mesh_y_dist = (self.mesh_y_max - self.mesh_y_min) / \
                            (self.mesh_y_count - 1)
-    def print_mesh(self, print_func, move_z=None):
+    def print_mesh(self, print_func, move_z=None, offset_zero=False):
         if self.mesh_z_table is not None:
+            offset = 0.
+            if (offset_zero and self.mesh_x_count & 1 and
+                    self.mesh_y_count & 1):
+                # offset the mesh by the center point
+                x_ctr = self.mesh_x_count / 2
+                y_ctr = self.mesh_y_count / 2
+                offset = self.mesh_z_table[y_ctr][x_ctr]
             msg = "Mesh X,Y: %d,%d\n" % (self.mesh_x_count, self.mesh_y_count)
             if move_z is not None:
                 msg += "Search Height: %d\n" % (move_z)
@@ -519,7 +529,7 @@ class ZMesh:
             msg += "Measured points:\n"
             for y_line in range(self.mesh_y_count - 1, -1, -1):
                 for z in self.mesh_z_table[y_line]:
-                    msg += "  %f" % (z)
+                    msg += "  %f" % (z - offset)
                 msg += "\n"
             print_func(msg)
         else:
