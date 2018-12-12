@@ -488,21 +488,19 @@ class ZMesh:
         mesh_y_pps = params['mesh_y_pps']
         px_cnt = params['x_count']
         py_cnt = params['y_count']
-        mesh_x_mult = mesh_x_pps + 1
-        mesh_y_mult = mesh_y_pps + 1
         if px_cnt == 3 or py_cnt == 3:
             # a mesh with 3 points on either axis defaults to legrange
             # upsampling
             self._sample = self._sample_lagrange
             self.probe_params['algo'] = 'lagrange'
-        if mesh_x_mult == 1 and mesh_y_mult == 1:
+        if mesh_x_pps == 0 and mesh_y_pps == 0:
             # No interpolation, sample the probed points directly
             self._sample = self._sample_direct
             self.probe_params['algo'] = 'direct'
-        self.mesh_x_count = px_cnt * mesh_x_mult - (mesh_x_mult - 1)
-        self.mesh_y_count = py_cnt * mesh_y_mult - (mesh_y_mult - 1)
-        self.x_mult = mesh_x_mult
-        self.y_mult = mesh_y_mult
+        self.mesh_x_count = (px_cnt - 1) * mesh_x_pps + px_cnt
+        self.mesh_y_count = (py_cnt - 1) * mesh_y_pps + py_cnt
+        self.x_mult = mesh_x_pps + 1
+        self.y_mult = mesh_y_pps + 1
         logging.debug("bed_mesh: Mesh grid size - X:%d, Y:%d"
                       % (self.mesh_x_count, self.mesh_y_count))
         self.mesh_x_dist = (self.mesh_x_max - self.mesh_x_min) / \
