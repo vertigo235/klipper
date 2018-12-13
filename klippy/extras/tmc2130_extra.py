@@ -44,7 +44,8 @@ class TMC2130_EXTRA:
                 tmc_gc, "STEPPER", self.name, command_func, desc=help_attr)
         wave_factor = config.getfloat('linearity_correction', 0.,
                                       minval=0., maxval=1.2)
-        self._set_wave(wave_factor)
+        if wave_factor:
+            self._set_wave(wave_factor)
     def printer_state(self, state):
         # TODO: It might be better to look up the correct stepper
         # in the TMC_SET_STEP gcode rather than store it initially
@@ -197,7 +198,7 @@ class TMC2130_EXTRA:
     def cmd_TMC_SET_STEALTH(self, params):
         gcode = self.printer.lookup_object('gcode')
         enable = gcode.get_str('ENABLE', params, None)
-        thrs = gcode.get_str('THRESHOLD', params, None)
+        thrs = gcode.get_int('THRESHOLD', params, None)
         if enable is not None:
             enable = enable.upper()
             if enable not in ["TRUE", "FALSE"]:
@@ -208,7 +209,8 @@ class TMC2130_EXTRA:
                 self.tmc2130.reg_GCONF |= (1 << 2)
             self.set_register("GCONF", self.tmc2130.reg_GCONF)
         if thrs is not None:
-            self.set_register("TPWMTHRS", max(0, min(0xfffff, thrs)))
+            sc_thrs = self.tmc2130.velocity_to_clock(thrs)
+            self.set_register("TPWMTHRS", max(0, min(0xfffff, sc_thrs)))
     cmd_TMC_SET_WAVE_help = "Set wave correction factor for TMC2130 driver"
     def cmd_TMC_SET_WAVE(self, params):
         gcode = self.printer.lookup_object('gcode')
@@ -265,3 +267,4 @@ class TMC2130_EXTRA:
                 (self.name, phase, target_step))
         else:
             gcode.respond_info("Correctly moved to step %d:" % target_step)
+
