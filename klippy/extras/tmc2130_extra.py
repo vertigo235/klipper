@@ -46,9 +46,10 @@ class TMC2130_EXTRA:
                 raise config.error("TMC Gcode [%s] Not supported" % (tmc_gc))
             gcode.register_mux_command(
                 tmc_gc, "STEPPER", self.name, command_func, desc=help_attr)
-        wave_factor = config.getfloat('linearity_correction', 0.,
+        wave_factor = config.getfloat('linearity_correction', None,
                                       minval=0., maxval=1.2)
-        self._set_wave(wave_factor)
+        if wave_factor is not None:
+            self._set_wave(wave_factor)
     def printer_state(self, state):
         # TODO: It might be better to look up the correct stepper
         # in the TMC_SET_STEP gcode rather than store it initially
@@ -85,15 +86,14 @@ class TMC2130_EXTRA:
         for reg in regs:
             self.set_register(reg[0], reg[1])
         logging.info(msg)
-    def _set_wave(self, fac):
+    def _set_wave(self, fac, use_default_wave=False):
         if fac < TMC_WAVE_FACTOR_MIN:
             fac = 0.0
         elif fac > TMC_WAVE_FACTOR_MAX:
             fac = TMC_WAVE_FACTOR_MAX
-        if fac == 0.:
-            # default wave
+        if use_default_wave and fac == 0.:
             self._set_default_wave()
-            return "Wave Set To Default"
+            return "Wave set to default"
         error = None
         vA = 0
         prevA = 0
@@ -244,7 +244,11 @@ class TMC2130_EXTRA:
     cmd_TMC_SET_WAVE_help = "Set wave correction factor for TMC2130 driver"
     def cmd_TMC_SET_WAVE(self, params):
         gcode = self.printer.lookup_object('gcode')
-        msg = self._set_wave(gcode.get_float('FACTOR', params))
+        is_default = gcode.get_str('SET_DEFAULT', params, "False").upper()
+        if is_default == "TRUE":
+            msg = self._set_wave(0., True)
+        else:
+            msg = self._set_wave(gcode.get_float('FACTOR', params))
         gcode.respond_info(msg)
     cmd_TMC_SET_STEP_help = "Force a stepper to a specified step"
     def cmd_TMC_SET_STEP(self, params):
