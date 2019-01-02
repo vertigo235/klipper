@@ -63,6 +63,7 @@ class BedMesh:
         self.fade_dist = self.fade_end - self.fade_start
         if self.fade_dist <= 0.:
             self.fade_start = self.fade_end = self.FADE_DISABLE
+        self.log_fade_complete = False
         self.base_fade_target = config.getfloat('fade_target', None)
         self.fade_target = 0.
         self.gcode = self.printer.lookup_object('gcode')
@@ -85,6 +86,7 @@ class BedMesh:
             self.calibrate.load_default_profile()
     def set_mesh(self, mesh):
         if mesh is not None:
+            self.log_fade_complete = True
             if self.base_fade_target is None:
                 self.fade_target = mesh.avg_z
             else:
@@ -134,6 +136,11 @@ class BedMesh:
         if self.z_mesh is None or not factor:
             # No mesh calibrated, or mesh leveling phased out.
             x, y, z, e = newpos
+            if self.log_fade_complete:
+                self.log_fade_complete = False
+                logging.info(
+                    "bed_mesh fade complete: Current Z: %.4f fade_target: %.4f "
+                    % (z, self.fade_target))
             self.toolhead.move([x, y, z + self.fade_target, e], speed)
         else:
             self.splitter.build_move(self.last_position, newpos, factor)
