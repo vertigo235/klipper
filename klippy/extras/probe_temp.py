@@ -20,17 +20,16 @@ def lerp(t, v0, v1):
 
 class ProbeTemp:
     def __init__(self, config):
-        self.config = config
         self.printer = config.get_printer()
         self.gcode = self.printer.lookup_object('gcode')
         self.display = None
         self.cal_helper = ProbeCalibrationHelper(config, self)
         self.sensor_type = config.get('sensor_type', None)
         if self.sensor_type is None:
-            raise self.config.error("ProbeTemp: sensor_type is a required field")
+            raise config.error("ProbeTemp: sensor_type is a required field")
         self.lock = threading.Lock()
         self.probe_offsets = None
-        offsets = self.config.get('t_offsets', None)
+        offsets = config.get('t_offsets', None)
         if offsets:
             offsets = offsets.split('\n')
             try:
@@ -52,8 +51,15 @@ class ProbeTemp:
         if self.sensor_type in thermistor.Sensors:
             params = thermistor.Sensors[self.sensor_type]
             self.sensor = thermistor.Thermistor(config, params)
-            self.sensor.setup_minmax(0., 100.)
-            self.sensor.setup_callback(self.temperature_callback)
+        elif config.has_section("thermistor " + self.sensor_type):
+            tcfg = config.getsection("thermistor " + self.sensor_type)
+            custom_thermistor = thermistor.CustomThermistor(tcfg)
+            self.sensor = custom_thermistor.create(config)
+        else:
+            raise config.error("probe_temp: Unknown Sensor Type")
+        self.sensor.setup_minmax(0., 100.)
+        self.sensor.setup_callback(self.temperature_callback)
+
         self.printer.register_event_handler("klippy:ready",
                                             self.handle_ready)
         self.gcode.register_command(
@@ -68,15 +74,6 @@ class ProbeTemp:
     def handle_ready(self):
         self.cal_helper.handle_ready()
         self.toolhead = self.printer.lookup_object('toolhead')
-        if self.sensor is None:
-            # A sensor was added to config but not found in the default
-            # sensor dictionary. Check to see if it is a custom thermistor.
-            custom_thermistor = self.printer.lookup_object(
-                self.sensor_type)
-            self.sensor = custom_thermistor.create(self.config)
-            if self.sensor:
-                self.sensor.setup_minmax(0., 100.)
-                self.sensor.setup_callback(self.temperature_callback)
     def temperature_callback(self, readtime, temp):
         with self.lock:
             self.sensor_temp = temp
