@@ -141,9 +141,9 @@ pat9125_get_state(struct pat9125_i2c *pat, uint8_t oid)
     i2cdev_read(pat->i2c, 1, &reg, 1, data);
 
     // Get current position after reading out motion
-    irq_disable();
+    irqstatus_t flag = irq_save();
     position = stepper_get_position(pat->e_stepper);
-    irq_enable();
+    irq_restore(flag);
 
     if (unlikely(*data == 0xFF)) {
         // ACK error, report zero status and shut down i2c

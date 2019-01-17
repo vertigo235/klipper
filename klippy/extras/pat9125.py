@@ -438,9 +438,15 @@ class PAT9125_RunoutDetect:
     def check_runout(self, axis_d, stepper_d):
         if stepper_d > 0:
             # extruder is moving in the positive direction
-            if axis_d < 0:
-                # detected negative movement when stepping forward,
-                # this could be jam / skipped step
+            if axis_d < -5:
+                # Small deltas that really don't indicate
+                # significant travel in the negative direction: ie
+                # a jam.  A small amount of negative movement will
+                # just be interpreted as a pure blind movement.
+                logging.info(
+                    "PAT9125: Negative motion detected,"
+                    " Axis Delta: %d Stepper Delta %d" %
+                    (axis_d, stepper_d))
                 self.blind_steps += stepper_d
                 if self.total_error_cnt:
                     self.total_error_cnt += 2
