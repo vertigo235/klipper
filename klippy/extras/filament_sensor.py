@@ -1,6 +1,6 @@
 # Generic Filament Sensor Module
 #
-# Copyright (C) 2018  Eric Callahan <arksine.code@gmail.com>
+# Copyright (C) 2019  Eric Callahan <arksine.code@gmail.com>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
@@ -19,16 +19,19 @@ class FilamentSensor:
             self.sensor = SwitchSensor(config)
         elif sensor_type == 1:
             # PAT9125 I2C Laser Sensor.  Only one instance is allowed
-            import pat9125
-            self.sensor = pat9125.PAT9125(config)
+            self.sensor = self.printer.try_load_module(config, 'pat9125')
+            if self.sensor is None:
+                raise config.error(
+                    "filament_sensor: Cannot load pat9125 module")
+            self.sensor.associate(self, config)
         self.autoload_on = config.getboolean('autoload_on', False)
         self.set_enable = self.sensor.set_enable
-        self.set_enable(self.autoload_on, False)
+        self.set_enable(False, False)
         self.sensor.set_callbacks(
             self.runout_event_handler, self.autoload_event_handler)
-        self.test_mode = config.get('test_mode', False)
         self.runout_gcode = config.get('runout_gcode', None)
         self.autoload_gcode = config.get('autoload_gcode', None)
+        self.event_running = False
         self.monitor_state = True
         self.print_status = "idle"
         for status in ["idle", "ready", "printing"]:
@@ -45,8 +48,16 @@ class FilamentSensor:
             self.cmd_QUERY_FILAMENT_SENSOR,
             desc=self.cmd_QUERY_FILAMENT_SENSOR_help)
     def handle_ready(self):
-        self.v_sd = self.printer.lookup_object('virtual_sdcard', None)
         self.toolhead = self.printer.lookup_object('toolhead')
+        # delay turning on autoload a bit.  This prevents a false
+        # positive on startup when using a switch sensor if the
+        # switch is open (ie: filament is detected)
+        if self.autoload_on:
+            reactor = self.printer.get_reactor()
+            reactor.register_callback(
+                (lambda e, s=self, st=self.print_status:
+                 s.update_print_status(st)),
+                reactor.monotonic() + 3.)
     def get_sensor(self):
         return self.sensor
     def set_callbacks(self, runout_cb=None, detected_cb=None, monitor=True):
@@ -73,47 +84,40 @@ class FilamentSensor:
         else:
             self.set_enable(self.autoload_on, False)
     def runout_event_handler(self, eventtime):
-        self.notify("Filament Runout Event Detected", d_timeout=5)
-        if self.test_mode:
+        if self.event_running:
             return
-        # TODO: we may need a lower level pause implementation.  The issue
-        # is that with a full lookahead queue its possible
-        # that filament will move past the extruder gears before
-        # the queue is flushed and we get an actual pause
-        if self.v_sd is not None and self.v_sd.is_active():
-            # Printing from virtual sd, run pause command
-            self.v_sd.cmd_M25({})
-        else:
-            self.gcode.respond_info("action:pause")
-        self.toolhead.wait_moves()
-        self.toolhead.capture_position()
+        self.event_running = True
+        self.notify("Filament Runout Event", d_timeout=5)
         if self.runout_gcode is not None:
-            self.gcode.run_script_from_command(self.runout_gcode)
+            self.exec_gcode(self.runout_gcode)
+        self.event_running = False
     def autoload_event_handler(self, eventtime):
-        self.notify("Filament Autoload Event Detected", d_timeout=5)
-        if self.test_mode:
+        if self.event_running:
             return
-        heater = self.toolhead.get_extruder().get_heater()
-        if heater.can_extrude:
-            self.notify("Autoloading Filament...", with_logging=False)
-            if self.autoload_gcode is not None:
-                self.gcode.run_script_from_command(self.autoload_gcode)
-                self.toolhead.wait_moves()
-                self.notify(
-                    "Autoload Complete", with_logging=False, d_timeout=5)
-        else:
-            self.notify(
-                "Must pre-heat extruder before autoloading", d_timeout=5)
+        self.event_running = True
+        self.notify("Autoload Event")
+        if self.autoload_gcode is not None:
+            self.exec_gcode(self.autoload_gcode)
         # reset autoload state in case this was user intiated
         if not self.autoload_on:
             self.update_print_status(self.print_status)
+        self.event_running = False
     def notify(self, msg, with_logging=True, d_timeout=None):
         if self.display is not None:
             self.display.set_message(msg, d_timeout)
         self.gcode.respond_info(msg)
         if with_logging:
             logging.info("filament_sensor: " + msg)
-    cmd_QUERY_FILAMENT_SENSOR_help = "Querey the status of the Filament Sensor"
+    def exec_gcode(self, gcode):
+        try:
+            self.gcode.run_script_from_command(gcode)
+        except self.gcode.error as err:
+            # We arent inside a gcode handler, so respond with an error
+            # XXX - how to handle prints from virtual_sd, cancel?
+            self.gcode.respond_error(str(err))
+        except:
+            raise
+    cmd_QUERY_FILAMENT_SENSOR_help = "Query the status of the Filament Sensor"
     def cmd_QUERY_FILAMENT_SENSOR(self, params):
         msg = self.sensor.query_status()
         self.gcode.respond_info(msg)
@@ -163,7 +167,7 @@ class SwitchSensor:
         if self.event_button_state is not None:
             # currently waiting on for an event to exectute
             logging.info(
-                "SwitchSensor: Received swtich event during timer")
+                "SwitchSensor: Received swtich event during rest period")
             return
         self.event_button_state = state
         self.reactor.update_timer(

@@ -149,7 +149,6 @@ class PAT9125:
         self.i2c_oid = self.pat9125_i2c.get_i2c_oid()
         self.printer.register_event_handler(
             "klippy:ready", self.handle_ready)
-        self.printer.add_object('pat9125', self)
 
         self.stepper_oid = None
         self.pat9125_query_cmd = None
@@ -184,6 +183,7 @@ class PAT9125:
 
         self.watch_insert = None
         self.initialized = False
+        self.f_sensor = None
         self.pat9125_state = {
             'STEPPER_POS': 0,
             'X_POS': 0,
@@ -215,6 +215,13 @@ class PAT9125:
         self.pat9125_stop_query_cmd = self.mcu.lookup_command(
             "command_pat9125_stop_query oid=%c", cq=self.cmd_queue)
         self.pat9125_i2c.build_config()
+    def associate(self, f_sensor, config):
+        if self.f_sensor is not None:
+            raise config.error(
+                "pat9125: sensor already associated with "
+                "another filament_sensor module")
+        self.f_sensor = f_sensor
+        self.watchdog.config_event_delays(config)
     def _setup_extruder_stepper(self):
         # XXX - see if there is a better way to retreive
         # the extruder stepper's OID than below.  Also may
@@ -495,16 +502,19 @@ class WatchDog:
         self.comms_error = False
         self.insert_detect = PAT9125_InsertDetect(config)
         self.runout_detect = PAT9125_RunoutDetect(config)
+        self.insert_delay = 3.
+        self.runout_delay = 3.
+        self.need_xye_init = True
+        self.last_event_time = 0.
+        self.last_xye = [0, 0, 0]
+        self.oq_deque = collections.deque(maxlen=20)
+    def config_event_delays(self, config):
         self.insert_delay = config.getfloat('insert_event_delay', 3., above=0.)
         # XXX - ideally the runout_delay should be above the toolhead's
         # max lookahead buffer time to make sure additional runouts
         # aren't triggered before stopping
         self.runout_delay = config.getfloat(
             'runout_event_delay', self.insert_delay, above=0.)
-        self.need_xye_init = True
-        self.last_event_time = 0.
-        self.last_xye = [0, 0, 0]
-        self.oq_deque = collections.deque(maxlen=20)
     def set_comms_error(self, err):
         self.comms_error = err
         self.runout_detect.set_enable(False)
@@ -556,3 +566,6 @@ class WatchDog:
                     delta[self.orientation]):
                 self.last_event_time = eventtime
                 self.log_oq_results()
+
+def load_config(config):
+    return PAT9125(config)
