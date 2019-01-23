@@ -87,30 +87,37 @@ class FilamentSensor:
         if self.event_running:
             return
         self.event_running = True
-        self.notify("Filament Runout Event", d_timeout=5)
+        self.notify("Filament Runout Event", disp_tmout=5)
         if self.runout_gcode is not None:
+            # If printing from octoprint, we need to send the pause action
+            # now.  Otherwise it will be sent after an acknowledgement,
+            # resulting in an extra gcode being sent after the pause and
+            # capture.
+            v_sd = self.printer.lookup_object('virtual_sdcard', None)
+            if v_sd is None or not v_sd.is_active():
+                self.gcode.respond_info('action:pause')
             self.exec_gcode(self.runout_gcode)
         self.event_running = False
     def autoload_event_handler(self, eventtime):
         if self.event_running:
             return
         self.event_running = True
-        self.notify("Autoload Event")
+        self.notify("Autoload Event", disp_tmout=5)
         if self.autoload_gcode is not None:
             self.exec_gcode(self.autoload_gcode)
         # reset autoload state in case this was user intiated
         if not self.autoload_on:
             self.update_print_status(self.print_status)
         self.event_running = False
-    def notify(self, msg, with_logging=True, d_timeout=None):
+    def notify(self, msg, with_logging=True, disp_tmout=None):
         if self.display is not None:
-            self.display.set_message(msg, d_timeout)
+            self.display.set_message(msg, disp_tmout)
         self.gcode.respond_info(msg)
         if with_logging:
             logging.info("filament_sensor: " + msg)
-    def exec_gcode(self, gcode):
+    def exec_gcode(self, script):
         try:
-            self.gcode.run_script_from_command(gcode)
+            self.gcode.run_script(script)
         except self.gcode.error as err:
             # We arent inside a gcode handler, so respond with an error
             # XXX - how to handle prints from virtual_sd, cancel?
@@ -167,7 +174,7 @@ class SwitchSensor:
         if self.event_button_state is not None:
             # currently waiting on for an event to exectute
             logging.info(
-                "SwitchSensor: Received swtich event during rest period")
+                "SwitchSensor: Received switch event during rest period")
             return
         self.event_button_state = state
         self.reactor.update_timer(
@@ -178,16 +185,14 @@ class SwitchSensor:
             logging.info("SwitchSensor: False positive detected")
         elif self.event_button_state:
             # button pushed, check if insert callback should happen
-            if self.insert_enabled:
-                if eventtime - self.last_cb_event_time < self.insert_delay:
-                    return self.reactor.NEVER
+            if (self.insert_enabled and
+                    (eventtime - self.last_cb_event_time) > self.insert_delay):
                 self.last_cb_event_time = eventtime
                 if self.insert_cb is not None:
                     self.reactor.register_callback(self.insert_cb)
-        elif self.runout_enabled:
+        elif (self.runout_enabled and
+                (eventtime - self.last_cb_event_time) > self.runout_delay):
             # Filament runout detected
-            if eventtime - self.last_cb_event_time < self.runout_delay:
-                return self.reactor.NEVER
             self.last_cb_event_time = eventtime
             if self.runout_cb is not None:
                 self.reactor.register_callback(self.runout_cb)
