@@ -28,7 +28,9 @@ class GCodeParser:
         if not self.is_fileinput:
             self.fd_handle = self.reactor.register_fd(self.fd, self.process_data)
         self.partial_input = ""
-        self.pending_commands = []
+        self.command_queue = []
+        self.script_queue = []
+        self.batch_queue = []
         self.bytes_read = 0
         self.input_log = collections.deque([], 50)
         # Command handling
@@ -161,45 +163,72 @@ class GCodeParser:
                 self.base_position, self.last_position, self.homing_position,
                 self.speed_factor, self.extrude_factor, self.speed))
         logging.info("\n".join(out))
+    def process_all(self):
+        if self.is_processing_data:
+            return
+        self.is_processing_data = True
+        while 1:
+            line = None
+            ack = False
+            if self.batch_queue:
+                line = self.batch_queue.pop(0)
+            elif self.command_queue:
+                line = self.command_queue.pop(0)
+                ack = True
+            elif self.script_queue:
+                script = self.script_queue.pop(0)
+                commands = script.split('/n')
+                try:
+                    for line in commands:
+                        self.process_command(line, ack)
+                except Exception:
+                    logging.exception("Script Running Error")
+                continue
+            if line is None:
+                break
+            self.process_command(line, ack)
+        if self.fd_handle is None:
+            self.fd_handle = self.reactor.register_fd(
+                self.fd, self.process_data)
+        self.is_processing_data = False
     # Parse input into commands
     args_r = re.compile('([A-Z_]+|[A-Z*/])')
-    def process_commands(self, commands, need_ack=True):
-        for line in commands:
-            # Ignore comments and leading/trailing spaces
-            line = origline = line.strip()
-            cpos = line.find(';')
-            if cpos >= 0:
-                line = line[:cpos]
-            # Break command into parts
-            parts = self.args_r.split(line.upper())[1:]
-            params = { parts[i]: parts[i+1].strip()
-                       for i in range(0, len(parts), 2) }
-            params['#original'] = origline
-            if parts and parts[0] == 'N':
-                # Skip line number at start of command
-                del parts[:2]
-            if not parts:
-                # Treat empty line as empty command
-                parts = ['', '']
-            params['#command'] = cmd = parts[0] + parts[1].strip()
-            # Invoke handler for command
-            self.need_ack = need_ack
-            handler = self.gcode_handlers.get(cmd, self.cmd_default)
-            try:
-                handler(params)
-            except error as e:
-                self.respond_error(str(e))
-                self.reset_last_position()
-                if not need_ack:
-                    raise
-            except:
-                msg = 'Internal error on command:"%s"' % (cmd,)
-                logging.exception(msg)
-                self.printer.invoke_shutdown(msg)
-                self.respond_error(msg)
-                if not need_ack:
-                    raise
-            self.ack()
+    def process_command(self, command, need_ack=True):
+        # Ignore comments and leading/trailing spaces
+        command = origcmd = command.strip()
+        cpos = command.find(';')
+        if cpos >= 0:
+            command = command[:cpos]
+        # Break command into parts
+        parts = self.args_r.split(command.upper())[1:]
+        params = { parts[i]: parts[i+1].strip()
+                    for i in range(0, len(parts), 2) }
+        params['#original'] = origcmd
+        if parts and parts[0] == 'N':
+            # Skip line number at start of command
+            del parts[:2]
+        if not parts:
+            # Treat empty line as empty command
+            parts = ['', '']
+        params['#command'] = cmd = parts[0] + parts[1].strip()
+        # Invoke handler for command
+        self.need_ack = need_ack
+        handler = self.gcode_handlers.get(cmd, self.cmd_default)
+        try:
+            handler(params)
+        except error as e:
+            self.respond_error(str(e))
+            self.reset_last_position()
+            if not need_ack:
+                raise
+        except:
+            msg = 'Internal error on command:"%s"' % (cmd,)
+            logging.exception(msg)
+            self.printer.invoke_shutdown(msg)
+            self.respond_error(msg)
+            if not need_ack:
+                raise
+        self.ack()
     m112_r = re.compile('^(?:[nN][0-9]+)?\s*[mM]112(?:\s|$)')
     def process_data(self, eventtime):
         # Read input, separate by newline, and add to pending_commands
@@ -213,7 +242,7 @@ class GCodeParser:
         lines = data.split('\n')
         lines[0] = self.partial_input + lines[0]
         self.partial_input = lines.pop()
-        pending_commands = self.pending_commands
+        pending_commands = self.command_queue
         pending_commands.extend(lines)
         # Special handling for debug file input EOF
         if not data and self.is_fileinput:
@@ -234,51 +263,32 @@ class GCodeParser:
                     self.fd_handle = None
                 return
         # Process commands
-        self.is_processing_data = True
-        self.pending_commands = []
-        self.process_commands(pending_commands)
-        if self.pending_commands:
-            self.process_pending()
-        self.is_processing_data = False
-    def process_pending(self):
-        pending_commands = self.pending_commands
-        while pending_commands:
-            self.pending_commands = []
-            self.process_commands(pending_commands)
-            pending_commands = self.pending_commands
-        if self.fd_handle is None:
-            self.fd_handle = self.reactor.register_fd(self.fd, self.process_data)
+        self.process_all()
     def process_batch(self, commands):
         if self.is_processing_data:
             return False
-        self.is_processing_data = True
+        self.batch_queue.extend(commands)
         try:
-            self.process_commands(commands, need_ack=False)
-        except error as e:
-            if self.pending_commands:
-                self.process_pending()
+            self.process_all()
+        except:
             self.is_processing_data = False
+            self.batch_queue = []
+            if self.command_queue:
+                # process pending commands if in the queue
+                self.process_all()
             raise
-        if self.pending_commands:
-            self.process_pending()
-        self.is_processing_data = False
         return True
     def run_script_from_command(self, script):
+        commands = script.split('\n')
         prev_need_ack = self.need_ack
         try:
-            self.process_commands(script.split('\n'), need_ack=False)
+            for line in commands:
+                self.process_command(line, need_ack=False)
         finally:
             self.need_ack = prev_need_ack
     def run_script(self, script):
-        commands = script.split('\n')
-        curtime = None
-        while 1:
-            res = self.process_batch(commands)
-            if res:
-                break
-            if curtime is None:
-                curtime = self.reactor.monotonic()
-            curtime = self.reactor.pause(curtime + 0.100)
+        self.script_queue.append(script)
+        self.process_all()
     # Response handling
     def ack(self, msg=None):
         if not self.need_ack or self.is_fileinput:
