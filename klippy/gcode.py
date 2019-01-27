@@ -177,7 +177,7 @@ class GCodeParser:
                 ack = True
             elif self.script_queue:
                 script = self.script_queue.pop(0)
-                commands = script.split('/n')
+                commands = script.split('\n')
                 try:
                     for line in commands:
                         self.process_command(line, ack)
