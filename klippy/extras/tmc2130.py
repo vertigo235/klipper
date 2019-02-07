@@ -18,6 +18,123 @@ ReadRegisters = [
     "CHOPCONF", "DRV_STATUS", "PWM_SCALE", "LOST_STEPS",
 ]
 
+Fields = {}
+
+
+######################################################################
+# Field helpers
+######################################################################
+
+# Return the position of the first bit set in a mask
+def ffs(mask):
+    return (mask & -mask).bit_length() - 1
+
+# Decode two's complement signed integer
+def decode_signed_int(val, bits):
+    if ((val >> (bits - 1)) & 1):
+        return val - (1 << bits)
+    return val
+
+class FieldHelper:
+    def __init__(self, all_fields, field_formatters={}, registers=None):
+        self.all_fields = all_fields
+        self.field_formatters = field_formatters
+        self.registers = registers
+        if self.registers is None:
+            self.registers = {}
+        self.field_to_register = { f: r for r, fields in self.all_fields.items()
+                                   for f in fields }
+    def get_field(self, field_name, reg_value=None, reg_name=None):
+        # Returns value of the register field
+        if reg_name is None:
+            reg_name = self.field_to_register[field_name]
+        if reg_value is None:
+            reg_value = self.registers[reg_name]
+        mask = self.all_fields[reg_name][field_name]
+        return (reg_value & mask) >> ffs(mask)
+    def set_field(self, field_name, field_value, reg_value=None, reg_name=None):
+        # Returns register value with field bits filled with supplied value
+        if reg_name is None:
+            reg_name = self.field_to_register[field_name]
+        if reg_value is None:
+            reg_value = self.registers.get(reg_name, 0)
+        mask = self.all_fields[reg_name][field_name]
+        new_value = (reg_value & ~mask) | ((field_value << ffs(mask)) & mask)
+        self.registers[reg_name] = new_value
+        return new_value
+    def set_config_field(self, config, field_name, default, config_name=None):
+        # Allow a field to be set from the config file
+        if config_name is None:
+            config_name = "driver_" + field_name.upper()
+        reg_name = self.field_to_register[field_name]
+        mask = self.all_fields[reg_name][field_name]
+        maxval = mask >> ffs(mask)
+        if maxval == 1:
+            val = config.getboolean(config_name, default)
+        else:
+            val = config.getint(config_name, default, minval=0, maxval=maxval)
+        return self.set_field(field_name, val)
+    def pretty_format(self, reg_name, value):
+        # Provide a string description of a register
+        reg_fields = self.all_fields.get(reg_name, {})
+        reg_fields = sorted([(mask, name) for name, mask in reg_fields.items()])
+        fields = []
+        for mask, field_name in reg_fields:
+            fval = (value & mask) >> ffs(mask)
+            sval = self.field_formatters.get(field_name, str)(fval)
+            if sval and sval != "0":
+                fields.append(" %s=%s" % (field_name, sval))
+        return "%-11s %08x%s" % (reg_name + ":", value, "".join(fields))
+
+
+######################################################################
+# Config reading helpers
+######################################################################
+
+def current_bits(current, sense_resistor, vsense_on):
+    sense_resistor += 0.020
+    vsense = 0.32
+    if vsense_on:
+        vsense = 0.18
+    cs = int(32. * current * sense_resistor * math.sqrt(2.) / vsense - 1. + .5)
+    return max(0, min(31, cs))
+
+def get_config_current(config):
+    vsense = False
+    run_current = config.getfloat('run_current', above=0., maxval=2.)
+    hold_current = config.getfloat('hold_current', run_current,
+                                   above=0., maxval=2.)
+    sense_resistor = config.getfloat('sense_resistor', 0.110, above=0.)
+    irun = current_bits(run_current, sense_resistor, vsense)
+    ihold = current_bits(hold_current, sense_resistor, vsense)
+    if irun < 16 and ihold < 16:
+        vsense = True
+        irun = current_bits(run_current, sense_resistor, vsense)
+        ihold = current_bits(hold_current, sense_resistor, vsense)
+    return vsense, irun, ihold
+
+def get_config_microsteps(config):
+    steps = {'256': 0, '128': 1, '64': 2, '32': 3, '16': 4,
+             '8': 5, '4': 6, '2': 7, '1': 8}
+    return config.getchoice('microsteps', steps)
+
+def get_config_stealthchop(config, tmc_freq):
+    mres = get_config_microsteps(config)
+    velocity = config.getfloat('stealthchop_threshold', 0., minval=0.)
+    if not velocity:
+        return mres, False, 0
+    stepper_name = config.get_name().split()[1]
+    stepper_config = config.getsection(stepper_name)
+    step_dist = stepper_config.getfloat('step_distance')
+    step_dist_256 = step_dist / (1 << mres)
+    threshold = int(tmc_freq * step_dist_256 / velocity + .5)
+    return mres, True, max(0, min(0xfffff, threshold))
+
+
+######################################################################
+# TMC2130 printer object
+######################################################################
+
 class TMC2130:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -34,22 +151,11 @@ class TMC2130:
             "DUMP_TMC", "STEPPER", self.name,
             self.cmd_DUMP_TMC, desc=self.cmd_DUMP_TMC_help)
         # Get config for initial driver settings
-        self.run_current = config.getfloat('run_current', above=0., maxval=2.)
-        self.hold_current = config.getfloat(
-            'hold_current', self.run_current, above=0., maxval=2.)
-        self.homing_current = config.getfloat(
-            'homing_current', self.run_current, above=0., maxval=2.)
-        self.sense_resistor = config.getfloat('sense_resistor', 0.110, above=0.)
-        steps = {'256': 0, '128': 1, '64': 2, '32': 3, '16': 4,
-                 '8': 5, '4': 6, '2': 7, '1': 8}
-        self.mres = config.getchoice('microsteps', steps)
-        self.step_dist_256 = step_dist / (1 << self.mres)
-
+        self.fields = FieldHelper(Fields)
         interpolate = config.getboolean('interpolate', True)
-        sc_velocity = config.getfloat('stealthchop_threshold', None, minval=0.)
-        sc_threshold = self.velocity_to_clock(sc_velocity)
-        self.iholddelay = config.getint(
-            'driver_IHOLDDELAY', 8, minval=0, maxval=15)
+        self.mres, en_pwm, sc_threshold = get_config_stealthchop(
+            config, TMC_FREQUENCY)
+        iholddelay = config.getint('driver_IHOLDDELAY', 8, minval=0, maxval=15)
         tpowerdown = config.getint('driver_TPOWERDOWN', 0, minval=0, maxval=255)
         blank_time_select = config.getint('driver_BLANK_TIME_SELECT', 1,
                                           minval=0, maxval=3)
@@ -61,110 +167,9 @@ class TMC2130:
         pwm_freq = config.getint('driver_PWM_FREQ', 1, minval=0, maxval=3)
         pwm_grad = config.getint('driver_PWM_GRAD', 4, minval=0, maxval=255)
         pwm_ampl = config.getint('driver_PWM_AMPL', 128, minval=0, maxval=255)
-
-        # new CHOPCONF options
-        ch_modes = {'SpreadCycle': 0, 'ConstantOff': 1}
-        chopper_mode = config.getchoice(
-            'chopper_mode', ch_modes, "SpreadCycle")
-        rndtf = config.getboolean('driver_RNDTF', False)
-        tfd = config.getint('driver_TFD', 0, minval=0, maxval=15)
-        offset = config.getint('driver_OFFSET', 0, minval=0, maxval=15)
-        disfdcc = config.getboolean('driver_DISFDCC', False)
-        vhighfs = config.getboolean('driver_VHIGHFS', False)
-        vhighchm = config.getboolean('driver_VHIGHCHM', False)
-        sync = config.getint('driver_SYNC', 0, minval=0, maxval=15)
-        dedge = config.getboolean('driver_DEDGE', False)
-        diss2g = config.getboolean('driver_DISS2G', False)
-
-        # new COOLCONF options
-        semin = config.getint('driver_SEMIN', 0, minval=0, maxval=15)
-        seup_choices = {'1': 0, '2': 1, '4': 2, '8': 3}
-        seup = config.getchoice('driver_SEUP', seup_choices, '1')
-        semax = config.getint('driver_SEMAX', 0, minval=0, maxval=15)
-        sedn_choices = {'32': 0, '8': 1, '2': 2, '1': 3}
-        sedn = config.getchoice('driver_SEDN', sedn_choices, '32')
-        seimin = config.getint('driver_SEIMIN', 0, minval=0, maxval=1)
-        sfilt = config.getboolean('driver_SFILT', False)
-
-        # other new driver options
-        tc_velocity = config.getint(
-            'coolstep_threshold', 0, minval=0)
-        self.tcoolthrs = self.velocity_to_clock(tc_velocity)
-        thigh_velocity = config.getint(
-            'thigh_threshold', 0, minval=0)
-        th_threshold = self.velocity_to_clock(thigh_velocity)
-        self.vsense = config.getboolean('driver_VSENSE', None)
-
-        # Configure registers
-        self.reg_GCONF = (sc_velocity is not None) << 2
-        if chopper_mode == 0:
-            # spreadcycle
-            cm_bits = (hstrt << 4) | (hend << 7)
-        else:
-            # constant off with fast decay
-            cm_bits = (((tfd & 0x07) << 4) | (offset << 7) |
-                       ((tfd & 0x08) << 11) | (disfdcc << 12))
-        self.reg_CHOP_CONF = (toff | cm_bits | (rndtf << 13) |
-                              (chopper_mode << 14) |
-                              (blank_time_select << 15) | (vhighfs << 18) |
-                              (vhighchm << 19) | (sync << 20) |
-                              (self.mres << 24) | (interpolate << 28) |
-                              (dedge << 29) | (diss2g << 30))
-        self.reg_COOL_CONF = (semin | (seup << 5) | (semax << 8) |
-                              (sedn << 13) | (seimin << 15) | (sgt << 16) |
-                              (sfilt << 24))
-        self.reg_PWM_CONF = (pwm_ampl | (pwm_grad << 8) | (pwm_freq << 16) |
-                             (pwm_scale << 18))
-        self.set_register("GCONF", self.reg_GCONF)
-        self.set_current_regs(self.run_current, self.hold_current)
-        self.set_register("TPOWERDOWN", tpowerdown)
-        self.set_register("TPWMTHRS", max(0, min(0xfffff, sc_threshold)))
-        # TODO: need to use velocity to clock for toolthrs and high?
-        self.set_register("TCOOLTHRS", max(0, min(0xfffff, self.tcoolthrs)))
-        self.set_register("THIGH", max(0, min(0xfffff, th_threshold)))
-        self.set_register("COOLCONF", self.reg_COOL_CONF)
-        self.set_register("PWMCONF", self.reg_PWM_CONF)
-        self.extras = tmc2130_extra.TMC2130_EXTRA(config, self)
-    def set_current_regs(self, run_current, hold_current):
-        def get_bits(rc, hc, vs):
-            run = self.current_bits(rc, self.sense_resistor, vs)
-            hold = self.current_bits(hc, self.sense_resistor, vs)
-            return run, hold
-        if self.vsense is None:
-            # Auto Calculate Vsense
-            vsense = False
-            irun, ihold = get_bits(run_current, hold_current, vsense)
-            if irun < 16 and ihold < 16:
-                vsense = True
-                irun, ihold = get_bits(run_current, hold_current, vsense)
-        else:
-            vsense = self.vsense
-            irun, ihold = get_bits(run_current, hold_current, self.vsense)
-        self.reg_CHOP_CONF &= ~(1 << 17)
-        self.reg_CHOP_CONF |= (vsense << 17)
-        ihold_irun = ihold | (irun << 8) | (self.iholddelay << 16)
-        self.set_register("CHOPCONF", self.reg_CHOP_CONF)
-        self.set_register("IHOLD_IRUN", ihold_irun)
-    def current_bits(self, current, sense_resistor, vsense_on):
-        sense_resistor += 0.020
-        vsense = 0.32
-        if vsense_on:
-            vsense = 0.18
-        cs = int(32. * current * sense_resistor * math.sqrt(2.) / vsense
-                 - 1. + .5)
-        return max(0, min(31, cs))
-    def velocity_to_clock(self, velocity):
-        if not velocity:
-            return 0
-        return int(TMC_FREQUENCY * self.step_dist_256 / velocity + .5)
-    def setup_pin(self, pin_type, pin_params):
-        if pin_type != 'endstop' or pin_params['pin'] != 'virtual_endstop':
-            raise pins.error("tmc2130 virtual endstop only useful as endstop")
-        if pin_params['invert'] or pin_params['pullup']:
             raise pins.error("Can not pullup/invert tmc2130 virtual endstop")
         return TMC2130VirtualEndstop(self)
     def get_register(self, reg_name):
-        reg = Registers[reg_name]
         self.spi.spi_send([reg, 0x00, 0x00, 0x00, 0x00])
         params = self.spi.spi_transfer([reg, 0x00, 0x00, 0x00, 0x00])
         pr = bytearray(params['response'])
@@ -185,7 +190,7 @@ class TMC2130:
         logging.info("DUMP_TMC %s", self.name)
         for reg_name in ReadRegisters:
             val = self.get_register(reg_name)
-            msg = "%-15s %08x" % (reg_name + ":", val)
+            msg = self.fields.pretty_format(reg_name, val)
             logging.info(msg)
             gcode.respond_info(msg)
 
