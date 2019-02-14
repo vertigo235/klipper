@@ -21,7 +21,7 @@ ReadRegisters = [
 class TMC2130:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.name = config.get_name().split()[1]
+        self.name = config.get_name().split()[-1]
         self.spi = bus.MCU_SPI_from_config(config, 3, default_speed=4000000)
         # Allow virtual endstop to be created
         self.diag1_pin = config.get('diag1_pin', None)
