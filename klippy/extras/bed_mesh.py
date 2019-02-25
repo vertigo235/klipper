@@ -600,13 +600,14 @@ class ZMesh:
                            (self.mesh_y_count - 1)
     def print_mesh(self, print_func, move_z=None, offset_zero=False):
         if self.mesh_z_table is not None:
-            offset = 0.
             if (offset_zero and self.mesh_x_count & 1 and
                     self.mesh_y_count & 1):
                 # offset the mesh by the center point
                 x_ctr = self.mesh_x_count / 2
                 y_ctr = self.mesh_y_count / 2
                 offset = self.mesh_z_table[y_ctr][x_ctr]
+            else:
+                offset = -self.mesh_offset
             msg = "Mesh X,Y: %d,%d\n" % (self.mesh_x_count, self.mesh_y_count)
             if move_z is not None:
                 msg += "Search Height: %d\n" % (move_z)
@@ -618,7 +619,7 @@ class ZMesh:
             msg += "Measured points:\n"
             for y_line in range(self.mesh_y_count - 1, -1, -1):
                 for z in self.mesh_z_table[y_line]:
-                    msg += "  %f" % (z + self.mesh_offset)
+                    msg += "  %f" % (z - offset)
                 msg += "\n"
             print_func(msg)
         else:
