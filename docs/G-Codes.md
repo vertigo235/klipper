@@ -187,6 +187,10 @@ enabled:
 - `PROBE`: Move the nozzle downwards until the probe triggers.
 - `QUERY_PROBE`: Report the current status of the probe ("triggered"
   or "open").
+- `PROBE_ACCURACY [REPEAT=<times>] [SPEED=<speed mm/s>] [X=<x pos>]
+  [Y=<y pos>] [Z=<z height>]`: Calculate the maximum, minimum, average,
+  median and standard deviation. The default values are: REPEAT=10,
+  SPEED=probe config speed, X=current X, Y=current Y and Z=10.
 - `PROBE_CALIBRATE [SPEED=<speed>]`: Run a helper script useful for
   calibrating the probe's z_offset. See the MANUAL_PROBE command for
   details on the parameters and the additional commands available
@@ -256,6 +260,16 @@ section is enabled:
   supplied name from persistent memory.  Note that after SAVE or
   REMOVE operations have been run the SAVE_CONFIG gcode must be run
   to make the changes to peristent memory permanent.
+
+## Bed Screws Helper
+
+The following commands are available when the "bed_screws" config
+section is enabled:
+- `BED_SCREWS_ADJUST`: This command will invoke the bed screws
+  adjustment tool. It will command the nozzle to different locations
+  (as defined in the config file) and allow one to make adjustments to
+  the bed screws so that the bed is a constant distance from the
+  nozzle.
 
 ## Z Tilt
 

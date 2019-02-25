@@ -28,8 +28,10 @@ src-$(CONFIG_HAVE_GPIO_ADC) += atsamd/adc.c
 src-$(CONFIG_HAVE_GPIO_I2C) += atsamd/i2c.c
 src-$(CONFIG_HAVE_GPIO_SPI) += atsamd/spi.c
 src-$(CONFIG_HAVE_GPIO_HARD_PWM) += atsamd/hard_pwm.c
+src-$(CONFIG_MACH_SAMD21) += atsamd/watchdog.c
 src-$(CONFIG_MACH_SAMD21) += atsamd/clock.c atsamd/timer.c generic/timer_irq.c
 src-$(CONFIG_MACH_SAMD21) += ../lib/samd21/samd21a/gcc/gcc/startup_samd21.c
+src-$(CONFIG_MACH_SAMD51) += atsamd/samd51_watchdog.c
 src-$(CONFIG_MACH_SAMD51) += atsamd/samd51_clock.c generic/armcm_timer.c
 src-$(CONFIG_MACH_SAMD51) += ../lib/samd51/samd51a/gcc/gcc/startup_samd51.c
 
@@ -50,7 +52,7 @@ $(OUT)samd.ld: $(ldfile-y) $(OUT)board-link
 target-y += $(OUT)klipper.bin $(OUT)klipper.elf.hex
 
 $(OUT)klipper.bin: $(OUT)klipper.elf
-	@echo "  Creating hex file $@"
+	@echo "  Creating bin file $@"
 	$(Q)$(OBJCOPY) -O binary $< $@
 
 $(OUT)klipper.elf.hex: $(OUT)klipper.elf
