@@ -205,8 +205,8 @@ class ToolHead:
         self.mcu = self.all_mcus[0]
         self.move_queue = MoveQueue()
         self.commanded_pos = [0., 0., 0., 0.]
-        self.commanded_velocity = 0
-        self.captured_pos = None
+        self.printer.register_event_handler("gcode:request_restart",
+                                            self._handle_request_restart)
         self.printer.register_event_handler("klippy:shutdown",
                                             self._handle_shutdown)
         # Velocity and acceleration control
@@ -425,6 +425,8 @@ class ToolHead:
         return { 'status': status, 'print_time': print_time,
                  'estimated_print_time': estimated_print_time,
                  'printing_time': print_time - last_print_start_time }
+    def _handle_request_restart(self, print_time):
+        self.motor_off()
     def _handle_shutdown(self):
         self.move_queue.reset()
         self.reset_print_time()
