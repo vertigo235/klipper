@@ -27,7 +27,7 @@ class TMC2130:
         self.diag1_pin = config.get('diag1_pin', None)
         ppins = self.printer.lookup_object("pins")
         ppins.register_chip("tmc2130_" + self.name, self)
-        # Add DUMP_TMC command
+        # Add DUMP_TMC, INIT_TMC command
         gcode = self.printer.lookup_object("gcode")
         step_dist = config.getsection(self.name).getfloat('step_distance')
         gcode.register_mux_command(
@@ -169,11 +169,11 @@ class TMC2130:
         params = self.spi.spi_transfer([reg, 0x00, 0x00, 0x00, 0x00])
         pr = bytearray(params['response'])
         return (pr[1] << 24) | (pr[2] << 16) | (pr[3] << 8) | pr[4]
-    def set_register(self, reg_name, val):
+    def set_register(self, reg_name, val, min_clock = 0):
         reg = Registers[reg_name]
         data = [(reg | 0x80) & 0xff, (val >> 24) & 0xff, (val >> 16) & 0xff,
                 (val >> 8) & 0xff, val & 0xff]
-        self.spi.spi_send(data)
+        self.spi.spi_send(data, min_clock)
     def get_microsteps(self):
         return 256 >> self.mres
     def get_phase(self):
@@ -183,11 +183,24 @@ class TMC2130:
         self.printer.lookup_object('toolhead').get_last_move_time()
         gcode = self.printer.lookup_object('gcode')
         logging.info("DUMP_TMC %s", self.name)
+        gcode.respond_info("========== Write-only registers ==========")
+        for reg_name, val in self.regs.items():
+            if reg_name not in ReadRegisters:
+                msg = self.fields.pretty_format(reg_name, val)
+                logging.info(msg)
+                gcode.respond_info(msg)
+        gcode.respond_info("========== Queried registers ==========")
         for reg_name in ReadRegisters:
             val = self.get_register(reg_name)
             msg = "%-15s %08x" % (reg_name + ":", val)
             logging.info(msg)
             gcode.respond_info(msg)
+    cmd_INIT_TMC_help = "Initialize TMC stepper driver registers"
+    def cmd_INIT_TMC(self, params):
+        logging.info("INIT_TMC 2130 %s", self.name)
+        print_time = self.printer.lookup_object('toolhead').get_last_move_time()
+        min_clock = self.spi.get_mcu().print_time_to_clock(print_time)
+        self._init_registers(min_clock)
 
 # Endstop wrapper that enables tmc2130 "sensorless homing"
 class TMC2130VirtualEndstop:
