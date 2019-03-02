@@ -117,6 +117,10 @@ class Printer:
     def _read_config(self):
         self.objects['configfile'] = pconfig = configfile.PrinterConfig(self)
         config = pconfig.read_main_config()
+        enable_debug = config.getboolean("enable_debug_logging", False)
+        if self.start_args['debuglevel'] != logging.DEBUG:
+            level = logging.DEBUG if enable_debug else logging.INFO
+            logging.getLogger().setLevel(level)
         if self.bglogger is not None:
             pconfig.log_config(config)
         # Create printer components
@@ -244,6 +248,7 @@ def main():
     debuglevel = logging.INFO
     if options.verbose:
         debuglevel = logging.DEBUG
+    start_args['debuglevel'] = debuglevel
     if options.debuginput:
         start_args['debuginput'] = options.debuginput
         debuginput = open(options.debuginput, 'rb')
