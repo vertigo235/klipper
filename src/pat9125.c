@@ -105,7 +105,7 @@ DECL_COMMAND(command_pat9125_write_verify,
              "command_pat9125_write_verify oid=%c sequence=%*s retries=%u");
 
 void
-command_pat9125_query(uint32_t *args)
+command_pat9125_start_update(uint32_t *args)
 {
     uint8_t oid = args[0];
     struct pat9125_i2c *pat = oid_lookup(oid, command_config_pat9125);
@@ -116,22 +116,23 @@ command_pat9125_query(uint32_t *args)
     pat->flags |= FLAG_UPDATING;
     sched_add_timer(&pat->time);
 }
-DECL_COMMAND(command_pat9125_query,
-             "command_pat9125_query oid=%c step_oid=%c clock=%u rest_ticks=%u");
+DECL_COMMAND(command_pat9125_start_update,
+             "command_pat9125_start_update oid=%c step_oid=%c clock=%u "
+             "rest_ticks=%u");
 
 void
-command_pat9125_stop_query(uint32_t *args)
+command_pat9125_stop_update(uint32_t *args)
 {
     uint8_t oid = args[0];
     struct pat9125_i2c *pat = oid_lookup(oid, command_config_pat9125);
     sched_del_timer(&pat->time);
     pat->flags &= ~FLAG_UPDATING;
 }
-DECL_COMMAND(command_pat9125_stop_query,
-             "command_pat9125_stop_query oid=%c");
+DECL_COMMAND(command_pat9125_stop_update,
+             "command_pat9125_stop_update oid=%c");
 
 static inline void
-pat9125_get_state(struct pat9125_i2c *pat, uint8_t oid)
+pat9125_update(struct pat9125_i2c *pat, uint8_t oid)
 {
     uint32_t position = 0;
     uint8_t* data = pat->reg_data;
@@ -170,7 +171,7 @@ pat9125_get_state(struct pat9125_i2c *pat, uint8_t oid)
     }
 
     send:
-    sendf("pat9125_state oid=%c epos=%i data=%*s flags=%c",
+    sendf("pat9125_update_response oid=%c epos=%i data=%*s flags=%c",
           oid, position - STEPPER_BIAS, pat->data_len, data, pat->flags);
 }
 
@@ -182,7 +183,7 @@ pat9125_task(void)
     uint8_t oid;
     struct pat9125_i2c *p;
     foreach_oid(oid, p, command_config_pat9125) {
-        pat9125_get_state(p, oid);
+        pat9125_update(p, oid);
     }
 }
 DECL_TASK(pat9125_task);

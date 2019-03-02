@@ -8,6 +8,7 @@ import bus
 import logging
 import threading
 import collections
+from filament_switch_sensor import BaseSensor
 import kinematics.extruder
 
 CHIP_ADDR = 0x75
@@ -84,10 +85,6 @@ class PAT9125_I2C:
     def _response_handler(self, params):
         if params['#sent_time'] >= self.last_query_time:
             self.write_verify_response = params['success']
-        elif params['#sent_time'] < .000001:
-            self.write_verify_response = params['success']
-            logging.info(
-                "PAT9125_I2C: sent time set to zero, allowing")
     def get_oid(self):
         return self.oid
     def read_register(self, reg, read_len):
@@ -133,31 +130,34 @@ class PAT9125_I2C:
         if self.write_verify_response is not None:
             return self.write_verify_response
         else:
-            logging.info("PAT9125: Timeout waiting for response")
+            logging.info("pat9125: Timeout waiting for response")
             return False
 
-class PAT9125:
+DetectMode = {"OFF": 0, "RUNOUT": 1, "INSERT": 2}
+
+class PAT9125(BaseSensor):
     def __init__(self, config):
-        self.printer = config.get_printer()
+        super(PAT9125, self).__init__(config)
         self.reactor = self.printer.get_reactor()
-        self.gcode = self.printer.lookup_object('gcode')
         self.pat9125_i2c = PAT9125_I2C(config)
         self.mcu = self.pat9125_i2c.get_mcu()
-        self.mcu.register_config_callback(self.build_config)
+        self.mcu.register_config_callback(self._build_config)
         self.cmd_queue = self.pat9125_i2c.get_command_queue()
         self.oid = self.pat9125_i2c.get_oid()
         self.i2c_oid = self.pat9125_i2c.get_i2c_oid()
+        self.printer.register_event_handler("klippy:ready", self._handle_ready)
         self.printer.register_event_handler(
-            "klippy:ready", self.handle_ready)
-        self.printer.add_object('pat9125', self)
+            "gcode:request_restart", self._handle_restart)
 
+        self.stepper_name = config.get("stepper", "extruder").lower()
+        if not config.has_section(self.stepper_name):
+            raise config.error(
+                "pat9125: Stepper name [%s] not in configuration" %
+                (self.stepper_name))
         self.stepper_oid = None
-        self.pat9125_query_cmd = None
-        self.pat9125_stop_query_cmd = None
+        self.pat9125_start_update_cmd = None
+        self.pat9125_stop_update_cmd = None
 
-        self.e_step_dist = 1.
-        self.ins_ref_time = config.getfloat(
-            "insert_refresh_time", .04, above=0., maxval=1.)
         # TODO: Calculate a sane default for runout_refresh_time using the
         # nozzle size and cross section.We want to be able to poll fast enough
         # to cover .2mm - .5mm of filament movement at the maximum possible
@@ -168,6 +168,8 @@ class PAT9125:
         # PAT9125 to detect filament loss
         self.ro_ref_time = config.getfloat(
             "runout_refresh_time", .07, above=0., maxval=1.)
+        self.ins_ref_time = config.getfloat(
+            "insert_refresh_time", .04, above=0., maxval=1.)
         self.invert_axis = config.getboolean("invert_axis", False)
         self.oq_enable = int(config.getboolean("oq_enable", False))
         orient_choices = {'X': 0, 'Y': 1}
@@ -178,12 +180,11 @@ class PAT9125:
         PAT9125_INIT1[3] = self.xres
         PAT9125_INIT1[5] = self.yres
 
-        self.watchdog = WatchDog(config, self)
-        self.set_callbacks = self.watchdog.set_callbacks
-        self.set_enable = self.watchdog.set_enable
-
-        self.watch_insert = None
+        self.tracker = MotionTracker(config, self)
+        self.sensor_mode = DetectMode["OFF"]
+        self.detect_enabled = True
         self.initialized = False
+        self.e_step_dist = 1.
         self.pat9125_state = {
             'STEPPER_POS': 0,
             'X_POS': 0,
@@ -192,38 +193,115 @@ class PAT9125:
             'SHUTTER': 0,
             'MOTION': False
         }
-    def handle_ready(self):
-        self._setup_extruder_stepper()
-        # delay init/update so as to not compete with display, tmc, etc
-        ins_en = self.watchdog.insert_detect.is_enabled()
-        if ins_en or self.watchdog.runout_detect.is_enabled():
-            self.reactor.register_callback(
-                (lambda e, s=self, i=ins_en: s.start_query(i)),
-                self.reactor.monotonic() + 1.)
-        else:
-            # Neither insert nor runout detection is enabled, just initialize
-            self.reactor.register_callback(
-                (lambda e, s=self: s._pat9125_init()),
-                self.reactor.monotonic() + 1.)
-    def build_config(self):
+
+        self.gcode.register_mux_command(
+            "QUERY_FILAMENT_SENSOR", "SENSOR", self.name,
+            self.cmd_QUERY_FILAMENT_SENSOR,
+            desc=self.cmd_QUERY_FILAMENT_SENSOR_help)
+    def _handle_ready(self):
+        super(PAT9125, self)._handle_ready()
+        self._init_stepper()
+        self._pat9125_init()
+        if self.insert_enabled:
+            self.set_mode("INSERT")
+    def _handle_restart(self, print_time):
+        # stop the pat9125 query timer
+        self.detect_enabled = False
+        self.insert_enabled = False
+        self.runout_enabled = False
+        try:
+            self.set_mode("OFF")
+        except Exception as e:
+            logging.info("pat9125: Error attempting to stop on restart")
+            logging.info(str(e))
+    def _build_config(self):
         self.mcu.add_config_cmd(
             "command_config_pat9125 oid=%d i2c_oid=%d oq_enable=%d"
             % (self.oid, self.i2c_oid, self.oq_enable))
-        self.pat9125_query_cmd = self.mcu.lookup_command(
-            "command_pat9125_query oid=%c step_oid=%c clock=%u rest_ticks=%u",
-            cq=self.cmd_queue)
-        self.pat9125_stop_query_cmd = self.mcu.lookup_command(
-            "command_pat9125_stop_query oid=%c", cq=self.cmd_queue)
+        self.pat9125_start_update_cmd = self.mcu.lookup_command(
+            "command_pat9125_start_update oid=%c step_oid=%c clock=%u "
+            "rest_ticks=%u", cq=self.cmd_queue)
+        self.pat9125_stop_update_cmd = self.mcu.lookup_command(
+            "command_pat9125_stop_update oid=%c", cq=self.cmd_queue)
         self.pat9125_i2c.build_config()
-    def _setup_extruder_stepper(self):
-        # XXX - see if there is a better way to retreive
-        # the extruder stepper's OID than below.  Also may
-        # want to get all printer extruders and have an
-        # option for which the filament sensor is on
-        toolhead = self.printer.lookup_object('toolhead')
-        e_stepper = toolhead.get_extruder().stepper
-        self.set_stepper(e_stepper)
-    def _handle_pat9125_state(self, params):
+    def _init_stepper(self):
+        # XXX - need to add get_stepper() function to extruder class
+        # and manual stepper class
+        stepper = None
+        if self.stepper_name == "extruder":
+            self.stepper_name = "extruder0"
+        obj = self.printer.lookup_object(self.stepper_name, None)
+        if obj is not None and hasattr(obj, "stepper"):
+            stepper = obj.stepper
+        else:
+            # parent is not a printer object (ie extruder or manual stepper)
+            # check the toolhead steppers
+            toolhead = self.printer.lookup_object('toolhead')
+            stepper_list = toolhead.get_kinematics().get_steppers()
+            for s in stepper_list:
+                if self.stepper_name == s.get_name():
+                    stepper = s
+        if stepper is None:
+            # XXX - should probably raise a different error here
+            raise self.gcode.error(
+                "pat9125: Unable to locate stepper [%s]" % (self.stepper_name))
+        else:
+            self.set_stepper(stepper)
+    def _pat9125_init(self):
+        mcu = self.mcu
+        self.initialized = False
+
+        # make sure the mcu timer is stopped
+        self.set_mode("OFF")
+
+        # Read and verify product ID
+        if not self._check_product_id():
+            logging.info("Rechecking ID...")
+            if not self._check_product_id():
+                return
+
+        self.pat9125_i2c.write_register('BANK_SELECTION', 0x00)
+        print_time = mcu.estimated_print_time(self.reactor.monotonic())
+        minclock = mcu.print_time_to_clock(print_time + .001)
+        self.pat9125_i2c.write_register('CONFIG', 0x97, minclock=minclock)
+        minclock = mcu.print_time_to_clock(print_time + .002)
+        self.pat9125_i2c.write_register('CONFIG', 0x17, minclock=minclock)
+
+        if not (self.pat9125_i2c.write_verify_sequence(PAT9125_INIT1)):
+            logging.info("pat9125: Init Sequence 1 failure")
+            return
+
+        print_time = mcu.estimated_print_time(self.reactor.monotonic())
+        minclock = mcu.print_time_to_clock(print_time + .01)
+        self.pat9125_i2c.write_register(
+            'BANK_SELECTION', 0x01, minclock=minclock)
+        for sequence in PAT9125_INIT2:
+            if not self.pat9125_i2c.write_verify_sequence(sequence):
+                logging.info("pat9125: Init Sequence 2 failure")
+                self.pat9125_i2c.write_register('BANK_SELECTION', 0x00)
+                return
+
+        self.pat9125_i2c.write_register('BANK_SELECTION', 0x00)
+        if not self.pat9125_i2c.write_verify_sequence(
+                [PAT9125_REGS['WP'], 0x00]):
+            logging.info("pat9125: Unable to re-enable write protect")
+            return
+
+        if not self._check_product_id():
+            return
+
+        self.pat9125_i2c.write_register('RES_X', self.xres)
+        self.pat9125_i2c.write_register('RES_Y', self.yres)
+        self.initialized = True
+
+        self.pat9125_state['X_POS'] = 0
+        self.pat9125_state['Y_POS'] = 0
+        self.tracker.reset()
+        self.mcu.register_msg(
+            self._handle_pat9125_update, "pat9125_update_response", self.oid)
+
+        logging.debug("pat9125: Initialization Success")
+    def _handle_pat9125_update(self, params):
         if params['flags'] & 0x01 == 0:
             # No ack / comms error
             self.reactor.register_async_callback(
@@ -236,10 +314,12 @@ class PAT9125:
 
         self.reactor.register_async_callback(
             (lambda e, s=self, p=dict(self.pat9125_state):
-                s.watchdog.handle_watchdog_update(e, p)))
+                s.tracker.update(e, p)))
     def _handle_comms_error(self):
         self.initialized = False
-        self.watchdog.set_comms_error(True)
+        self.detect_enabled = False
+        self.insert_enabled = False
+        self.runout_enabled = False
         logging.info(
             "pat9125: Communication Error encountered, monitoring stopped")
     def _pat9125_parse_status(self, data, motion):
@@ -259,100 +339,60 @@ class PAT9125:
         if self.oq_enable:
             self.pat9125_state['SHUTTER'] = data[3]
             self.pat9125_state['FRAME'] = data[4]
-    def set_stepper(self, stepper):
-        self.e_step_dist = stepper.get_step_dist()
-        self.stepper_oid = stepper.mcu_stepper.get_oid()
-        self.watchdog.runout_detect.set_move_limits(self.e_step_dist)
-    def start_query(self, ins_enable):
-        if self.watch_insert is not None and self.watch_insert is ins_enable:
-            # query already started with the correct refresh time
-            return
-        if not self.initialized:
-            self._pat9125_init()
-            if not self.initialized:
-                raise self.gcode.error(
-                    "PAT9125 not initialized, cannot start query")
-        clock = self.mcu.get_query_slot(self.oid)
-        # Determine rest ticks
-        self.watch_insert = ins_enable
-        refresh_time = self.ins_ref_time if ins_enable else self.ro_ref_time
-        rest_ticks = self.mcu.seconds_to_clock(refresh_time)
-        self.pat9125_query_cmd.send(
-            [self.oid, self.stepper_oid, clock, rest_ticks])
-        self.watchdog.need_xye_init = True
-        logging.info(
-            "PAT9125: Polling activated, sampling every %.4f ms"
-            % (refresh_time))
-    def stop_query(self):
-        self.pat9125_stop_query_cmd.send([self.oid])
-        self.watch_insert = None
-    def get_state(self):
-        return dict(self.pat9125_state)
-    def _pat9125_init(self):
-        mcu = self.mcu
-        self.initialized = False
-
-        # make sure the mcu timer is stopped
-        self.stop_query()
-
-        # Read and verify product ID
-        if not self.check_product_id():
-            logging.info("Rechecking ID...")
-            if not self.check_product_id():
-                return
-
-        self.pat9125_i2c.write_register('BANK_SELECTION', 0x00)
-        print_time = mcu.estimated_print_time(self.reactor.monotonic())
-        minclock = mcu.print_time_to_clock(print_time + .001)
-        self.pat9125_i2c.write_register('CONFIG', 0x97, minclock=minclock)
-        minclock = mcu.print_time_to_clock(print_time + .002)
-        self.pat9125_i2c.write_register('CONFIG', 0x17, minclock=minclock)
-
-        if not (self.pat9125_i2c.write_verify_sequence(PAT9125_INIT1)):
-            logging.info("PAT9125: Init 1 failure")
-            return
-
-        print_time = mcu.estimated_print_time(self.reactor.monotonic())
-        minclock = mcu.print_time_to_clock(print_time + .01)
-        self.pat9125_i2c.write_register(
-            'BANK_SELECTION', 0x01, minclock=minclock)
-        for sequence in PAT9125_INIT2:
-            if not self.pat9125_i2c.write_verify_sequence(sequence):
-                logging.info("PAT9125: Init 2 failure")
-                self.pat9125_i2c.write_register('BANK_SELECTION', 0x00)
-                return
-
-        self.pat9125_i2c.write_register('BANK_SELECTION', 0x00)
-        if not self.pat9125_i2c.write_verify_sequence(
-                [PAT9125_REGS['WP'], 0x00]):
-            logging.info("PAT9125: Unable to re-enable write protect")
-            return
-
-        if not self.check_product_id():
-            return
-
-        self.pat9125_i2c.write_register('RES_X', self.xres)
-        self.pat9125_i2c.write_register('RES_Y', self.yres)
-        self.initialized = True
-
-        self.pat9125_state['X_POS'] = 0
-        self.pat9125_state['Y_POS'] = 0
-        self.watchdog.need_xye_init = True
-        self.mcu.register_msg(
-            self._handle_pat9125_state, "pat9125_state", self.oid)
-
-        logging.info("PAT9125 Initialization Success")
-    def verify_id(self, pid):
+    def _check_product_id(self):
+        pid = self.pat9125_i2c.read_register('PID1', 2)
         if ((pid[1] << 8) | pid[0]) != PAT9125_PRODUCT_ID:
             logging.info(
-                "Product ID Mismatch Expected: %d, Recd: %d"
+                "pat9125: Product ID Mismatch Expected: %d, Recd: %d"
                 % (PAT9125_PRODUCT_ID, ((pid[1] << 8) | pid[0])))
             return False
         return True
-    def check_product_id(self):
-        pid = self.pat9125_i2c.read_register('PID1', 2)
-        return self.verify_id(pid)
-    def query_status(self):
+    def set_stepper(self, stepper):
+        # XXX - need to add get_oid to stepper class
+        self.e_step_dist = stepper.get_step_dist()
+        self.stepper_oid = stepper.mcu_stepper.get_oid()
+        self.tracker.set_runout_limits(self.e_step_dist)
+    def set_mode(self, new_mode):
+        if (self.sensor_mode == DetectMode[new_mode] or
+                not self.initialized):
+            return
+
+        self.sensor_mode = DetectMode[new_mode]
+        if self.sensor_mode == DetectMode["RUNOUT"]:
+            refresh_time = self.ro_ref_time
+        elif self.sensor_mode == DetectMode["INSERT"]:
+            refresh_time = self.ins_ref_time
+        elif self.sensor_mode == DetectMode["OFF"]:
+            self.pat9125_stop_update_cmd.send([self.oid])
+            return
+        else:
+            self.sensor_mode = DetectMode["OFF"]
+            # XXX - Probably shouldn't be a gcode error
+            raise self.gcode.error(
+                "pat9125: Unknown mode [%s]" % (new_mode))
+
+        # Start PAT9125 read timer
+        clock = self.mcu.get_query_slot(self.oid)
+        rest_ticks = self.mcu.seconds_to_clock(refresh_time)
+        self.pat9125_start_update_cmd.send(
+            [self.oid, self.stepper_oid, clock, rest_ticks])
+        self.tracker.reset()
+        logging.debug(
+            "pat9125: Polling activated, sampling every %.4f ms"
+            % (refresh_time))
+    def get_state(self):
+        return dict(self.pat9125_state)
+    def set_enable(self, runout, insert):
+        super(PAT9125, self).set_enable(runout, insert)
+        if self.detect_enabled:
+            if runout or insert:
+                mode = "INSERT" if insert else "RUNOUT"
+            else:
+                mode = "OFF"
+            self.set_mode(mode)
+        else:
+            self.runout_enabled = self.insert_enabled = False
+    def cmd_QUERY_FILAMENT_SENSOR(self, params):
         state = self.get_state()
         if state['MOTION']:
             msg = "pat9125 sensor: Motion Detected"
@@ -364,172 +404,60 @@ class PAT9125:
         if self.oq_enable:
             msg += "\nAverage Brightness: %d Laser Shutter Time: %d" % (
                 state['FRAME'], state['SHUTTER'])
-        return msg
-
-class PAT9125_InsertDetect:
-    def __init__(self, config):
-        self.reactor = config.get_printer().get_reactor()
-        self._counter_max = config.getint(
-            'max_insert_counter', 12, minval=1)
-        self._sum_max = config.getint(
-            'max_insert_sum', 20, minval=1)
-        self.callback = None
-        self.sum = self.change_counter = 0
-        self.enabled = False
-    def set_enable(self, enable):
-        if enable:
-            self.sum = self.change_counter = 0
-        self.enabled = enable
-    def is_enabled(self):
-        return self.enabled
-    def set_callback(self, callback):
-        self.callback = callback
-    def check_insert(self, axis_d):
-        if axis_d != 0:
-            if axis_d > 0:
-                self.sum += axis_d
-                self.change_counter += 3
-            elif self.change_counter > 1:
-                self.change_counter -= 2
-        elif self.change_counter > 0:
-            self.change_counter -= 1
-
-        if not self.change_counter:
-            self.sum = 0
-
-        if (self.change_counter >= self._counter_max and
-                self.sum > self._sum_max):
-            logging.info("PAT9125: Filament Insert detected")
-            self.sum = self.change_counter = 0
-            if self.callback is not None:
-                self.reactor.register_callback(self.callback)
-            return True
-        return False
-
-class PAT9125_RunoutDetect:
-    def __init__(self, config):
-        self.reactor = config.get_printer().get_reactor()
-        self._max_error = config.getint(
-            'max_runout_errors', 17, minval=1)
-        self._blind_move_max = config.getfloat(
-            'max_blind_movement', 2., above=0.)
-        self._blind_error_distance = config.getfloat(
-            'blind_error_distance', .3, above=0.)
-        self.callback = None
-        self.total_error_cnt = 0
-        self.blind_error_cnt = 0
-        self.prev_d = 0
-        self.blind_steps = 0
-        self.max_blind_steps = 0
-        self.min_error_steps = 0
-    def set_enable(self, enable):
-        if enable:
-            self.total_error_cnt = self.blind_error_cnt = 0
-            self.blind_steps = self.prev_d = 0
-        self.enabled = enable
-    def set_move_limits(self, step_distance):
-        self.max_blind_steps = int(self._blind_move_max / step_distance + .5)
-        self.min_error_steps = int(
-            self._blind_error_distance / step_distance + .5)
-    def is_enabled(self):
-        return self.enabled
-    def set_callback(self, callback):
-        self.callback = callback
-    def check_runout(self, axis_d, stepper_d):
-        if stepper_d > 0:
-            # extruder is moving in the positive direction
-            if axis_d < -5:
-                # Small deltas that really don't indicate
-                # significant travel in the negative direction: ie
-                # a jam.  A small amount of negative movement will
-                # just be interpreted as a pure blind movement.
-                logging.info(
-                    "PAT9125: Negative motion detected,"
-                    " Axis Delta: %d Stepper Delta %d" %
-                    (axis_d, stepper_d))
-                self.blind_steps += stepper_d
-                if self.total_error_cnt:
-                    self.total_error_cnt += 2
-                else:
-                    self.total_error_cnt += 1
-            elif axis_d > 0:
-                # positive movement, we are good
-                self.blind_steps = self.blind_error_cnt = 0
-                if self.total_error_cnt:
-                    self.total_error_cnt -= 1
-            else:
-                # No movement detected, we are stepping blind.
-                # TODO: Not sure this is the best solution.  I
-                # may need to come up with a completely unique
-                # solution to reliably determine when a
-                # runout occurs in as short of time as possible
-                self.blind_steps += stepper_d
-                cur_err = self.blind_steps / (self.blind_error_cnt + 1)
-                if ((self.prev_d <= 0 or self.total_error_cnt) and
-                        cur_err > self.min_error_steps):
-                    self.total_error_cnt += 1
-                    self.blind_error_cnt += 1
-
-        self.prev_d = axis_d
-        if (self.total_error_cnt > self._max_error or
-                self.blind_steps > self.max_blind_steps):
-            logging.info(
-                "PAT9125 Runout Detected - Error Count: %d Blind Steps: %d" %
-                (self.total_error_cnt, self.blind_steps))
-            self.total_error_cnt = self.blind_error_cnt = 0
-            self.blind_steps = self.prev_d = 0
-            if self.callback is not None:
-                self.reactor.register_callback(self.callback)
-            return True
-        return False
+        self.gcode.respond_info(msg)
 
 XYE_KEYS = ['X_POS', 'Y_POS', 'STEPPER_POS']
 
-class WatchDog:
+class MotionTracker:
     def __init__(self, config, pat9125):
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.pat9125 = pat9125
         self.oq_enable = pat9125.oq_enable
         self.orientation = pat9125.orientation
-        self.comms_error = False
-        self.insert_detect = PAT9125_InsertDetect(config)
-        self.runout_detect = PAT9125_RunoutDetect(config)
-        self.insert_delay = config.getfloat('insert_event_delay', 3., above=0.)
-        # XXX - ideally the runout_delay should be above the toolhead's
-        # max lookahead buffer time to make sure additional runouts
-        # aren't triggered before stopping
-        self.runout_delay = config.getfloat(
-            'runout_event_delay', self.insert_delay, above=0.)
+        self.event_delay = config.getfloat('event_delay', 3., above=0.)
         self.need_xye_init = True
         self.last_event_time = 0.
         self.last_xye = [0, 0, 0]
         self.oq_deque = collections.deque(maxlen=20)
-    def set_comms_error(self, err):
-        self.comms_error = err
-        self.runout_detect.set_enable(False)
-        self.insert_detect.set_enable(False)
-    def set_callbacks(self, runout_cb, insert_cb):
-        self.runout_detect.set_callback(runout_cb)
-        self.insert_detect.set_callback(insert_cb)
-    def set_enable(self, insert, runout):
-        if insert and runout:
-            # only one can be enabled at a time
-            insert = False
-        if not self.comms_error:
-            self.insert_detect.set_enable(insert)
-            self.runout_detect.set_enable(runout)
-            if self.pat9125.initialized:
-                if not insert and not runout:
-                    self.pat9125.stop_query()
-                else:
-                    self.pat9125.start_query(insert)
-    def log_oq_results(self):
+
+        # runout tracking
+        self.max_runout_errors = config.getint(
+            'max_runout_errors', 17, minval=1)
+        self.max_blind_movement = config.getfloat(
+            'max_blind_movement', 2., above=0.)
+        self.blind_error_distance = config.getfloat(
+            'blind_error_distance', .3, above=0.)
+        self.ro_total_errors = 0
+        self.ro_blind_errors = 0
+        self.ro_prev_d = 0
+        self.ro_blind_steps = 0
+
+        self.max_blind_steps = 0
+        self.min_error_steps = 0
+
+        # insert tracking
+        self.max_insert_counter = config.getint(
+            'max_insert_counter', 12, minval=1)
+        self.max_insert_sum = config.getint(
+            'max_insert_sum', 20, minval=1)
+        self.ins_sum = 0
+        self.ins_change_counter = 0
+    def _log_oq_results(self):
         if self.oq_enable:
-            logging.info(
-                "PAT9125: Last 20 OQ results (shutter, frame) %s" %
+            logging.debug(
+                "pat9125: Last 20 OQ results (shutter, frame) %s" %
                 str(list(self.oq_deque)))
-    def handle_watchdog_update(self, eventtime, state):
+    def set_runout_limits(self, step_distance):
+        self.max_blind_steps = int(self.max_blind_movement / step_distance + .5)
+        self.min_error_steps = int(
+            self.blind_error_distance / step_distance + .5)
+    def reset(self):
+        self.need_xye_init = True
+        self.ro_total_errors = self.ro_blind_errors = 0
+        self.ro_blind_steps = self.ro_prev_d = 0
+        self.ins_sum = self.ins_change_counter = 0
+    def update(self, eventtime, state):
         curpos = [state[key] for key in XYE_KEYS]
         delta = [curpos[i] - self.last_xye[i] for i in range(3)]
         self.oq_deque.append((state['SHUTTER'], state['FRAME']))
@@ -542,17 +470,84 @@ class WatchDog:
         # logging.info("PAT9125 status:\n%s" % (str(pat9125_state)))
         # logging.info("Delta: %s" % (str(delta)))
 
-        if self.runout_detect.is_enabled():
-            if eventtime - self.last_event_time < self.runout_delay:
+        if self.pat9125.runout_enabled:
+            if eventtime - self.last_event_time < self.event_delay:
                 return
-            if self.runout_detect.check_runout(
-                    delta[self.orientation], delta[2]):
+            if self.check_runout(delta[self.orientation], delta[2]):
                 self.last_event_time = eventtime
-                self.log_oq_results()
-        elif self.insert_detect.is_enabled():
-            if eventtime - self.last_event_time < self.insert_delay:
+                self._log_oq_results()
+        elif self.pat9125.insert_enabled:
+            if eventtime - self.last_event_time < self.event_delay:
                 return
-            if self.insert_detect.check_insert(
-                    delta[self.orientation]):
+            if self.check_insert(delta[self.orientation]):
                 self.last_event_time = eventtime
-                self.log_oq_results()
+                self._log_oq_results()
+    def check_runout(self, axis_d, stepper_d):
+        if stepper_d > 0:
+            # extruder is moving in the positive direction
+            if axis_d < -5:
+                # Significant negative delta.  The stepper is
+                # moving forward, axis is moving backward.  This
+                # could be a jam.
+                logging.debug(
+                    "pat9125: Negative motion detected,"
+                    " Axis Delta: %d Stepper Delta %d" %
+                    (axis_d, stepper_d))
+                self.ro_blind_steps += stepper_d
+                if self.ro_total_errors:
+                    self.ro_total_errors += 2
+                else:
+                    self.ro_total_errors += 1
+            elif axis_d > 0:
+                # positive movement, we are good
+                self.ro_blind_steps = self.ro_blind_errors = 0
+                if self.ro_total_errors:
+                    self.ro_total_errors -= 1
+            else:
+                # No movement detected, we are stepping blind.
+                self.ro_blind_steps += stepper_d
+                cur_err = self.ro_blind_steps / (self.ro_blind_errors + 1)
+                if ((self.ro_prev_d <= 0 or self.ro_total_errors) and
+                        cur_err > self.min_error_steps):
+                    self.ro_total_errors += 1
+                    self.ro_blind_errors += 1
+
+        self.ro_prev_d = axis_d
+        # XXX - Possible to include frame shutter time as a backup
+        # method for verifying a runout.  Generally the shutter
+        # time adjusts to a lower number if the object being tracked
+        # contrasts with the background.  The empty shutter value
+        # would need to be calibrated
+        if (self.ro_total_errors > self.max_runout_errors or
+                self.ro_blind_steps > self.max_blind_steps):
+            logging.info(
+                "pat9125: Runout Detected - Error Count: %d Blind Steps: %d" %
+                (self.ro_total_errors, self.ro_blind_steps))
+            self.ro_total_errors = self.ro_blind_errors = 0
+            self.ro_blind_steps = self.ro_prev_d = 0
+            self.reactor.register_callback(self.pat9125._runout_event_handler)
+            return True
+        return False
+    def check_insert(self, axis_d):
+        if axis_d != 0:
+            if axis_d > 0:
+                self.ins_sum += axis_d
+                self.ins_change_counter += 3
+            elif self.ins_change_counter > 1:
+                self.ins_change_counter -= 2
+        elif self.ins_change_counter > 0:
+            self.ins_change_counter -= 1
+
+        if not self.ins_change_counter:
+            self.ins_sum = 0
+
+        if (self.ins_change_counter >= self.max_insert_counter and
+                self.ins_sum > self.max_insert_sum):
+            logging.info("pat9125: Insert detected")
+            self.ins_sum = self.ins_change_counter = 0
+            self.reactor.register_callback(self.pat9125._insert_event_handler)
+            return True
+        return False
+
+def load_config_prefix(config):
+    return PAT9125(config)
