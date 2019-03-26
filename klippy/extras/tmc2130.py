@@ -31,6 +31,9 @@ class TMC2130:
         gcode = self.printer.lookup_object("gcode")
         step_dist = config.getsection(self.name).getfloat('step_distance')
         gcode.register_mux_command(
+            "SET_TMC_CURRENT", "STEPPER", self.name,
+            self.cmd_SET_TMC_CURRENT, desc=self.cmd_SET_TMC_CURRENT_help)
+        gcode.register_mux_command(
             "DUMP_TMC", "STEPPER", self.name,
             self.cmd_DUMP_TMC, desc=self.cmd_DUMP_TMC_help)
         # Get config for initial driver settings
