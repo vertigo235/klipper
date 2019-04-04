@@ -115,7 +115,8 @@ class ProbeTemp:
             "SET_GCODE_OFFSET Z_ADJUST=%.4f" % (z_adj))
     def pause_for_temp(self, timeout=300, compare=lambda x, y: x <= y):
         total_time = 0
-        while compare(self.get_temp(0)):
+        temp = self.get_temp(0)
+        while compare(temp[0], temp[1]):
             total_time += 1
             if timeout:
                 remaining = timeout - total_time
