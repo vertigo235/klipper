@@ -125,6 +125,7 @@ class ProbeTemp:
                     return False
             else:
                 self.pause_for_time(1)
+            temp, target = self.get_temp(0)
         return True
     def pause_for_time(self, dwell_time, time_remaining=None):
         for i in range(dwell_time):
