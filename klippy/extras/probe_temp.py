@@ -115,8 +115,8 @@ class ProbeTemp:
             "SET_GCODE_OFFSET Z_ADJUST=%.4f" % (z_adj))
     def pause_for_temp(self, timeout=300, compare=lambda x, y: x <= y):
         total_time = 0
-        temp = self.get_temp(0)
-        while compare(temp[0], temp[1]):
+        temp, target = self.get_temp(0)
+        while compare(temp, target):
             total_time += 1
             if timeout:
                 remaining = timeout - total_time
@@ -156,10 +156,12 @@ class ProbeTemp:
         # direction = self.gcode.get_str('DIRECTION', params, 'up').lower()
         probe_cooling = not extr_on and not bed_on
         if probe_cooling:
+            self.gcode.respond_info("Waiting for probe to cool...")
             temp_acheived = self.pause_for_temp(
-                timeout, compare=lambda x, y: x >= y)
+                timeout=timeout, compare=lambda x, y: x >= y)
         else:
-            temp_acheived = self.pause_for_temp(timeout)
+            self.gcode.respond_info("Waiting for probe to heat...")
+            temp_acheived = self.pause_for_temp(timeout=timeout)
         if temp_acheived:
             self.gcode.respond_info("Pinda Temp Achieved")
         else:
