@@ -252,9 +252,7 @@ usb_request_bootloader(void)
     // Disable USB and pause for 5ms so host recognizes a disconnect
     irq_disable();
     sie_cmd_write(SIE_CMD_SET_DEVICE_STATUS, 0);
-    uint32_t end = timer_read_time() + timer_from_us(5000);
-    while (timer_is_before(timer_read_time(), end))
-        ;
+    udelay(5000);
     // The "LPC17xx-DFU-Bootloader" will enter the bootloader if the
     // watchdog timeout flag is set.
     LPC_WDT->WDMOD = 0x07;
@@ -277,6 +275,8 @@ usbserial_init(void)
     gpio_peripheral(GPIO(0, 30), 1, 0);
     gpio_peripheral(GPIO(0, 29), 1, 0);
     gpio_peripheral(GPIO(2, 9), 1, 0);
+    // enforce a minimum time bus is disconnected before connecting
+    udelay(5000);
     // setup endpoints
     realize_endpoint(EP0OUT, USB_CDC_EP0_SIZE);
     realize_endpoint(EP0IN, USB_CDC_EP0_SIZE);
