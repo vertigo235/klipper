@@ -257,8 +257,8 @@ class GCodeParser:
                     self.fd_handle = None
                 return
         # Process commands
-        self.process_pending()
-    def process_pending(self):
+        self._process_pending()
+    def _process_pending(self):
         if self.is_processing_data:
             return
         self.is_processing_data = True
@@ -266,18 +266,18 @@ class GCodeParser:
             if self.pending_commands:
                 cmds = self.pending_commands
                 self.pending_commands = []
-                self.process_commands(cmds)
+                self._process_commands(cmds)
             elif self.script_queue:
                 script = self.script_queue.pop(0)
                 try:
-                    self.process_commands(script.split('\n'), need_ack=False)
+                    self._process_commands(script.split('\n'), need_ack=False)
                 except Exception:
                     logging.exception("Script Running Error")
             else:
                 break
         if self.fd_handle is None:
             self.fd_handle = self.reactor.register_fd(
-                self.fd, self.process_data)
+                self.fd, self._process_data)
         self.is_processing_data = False
     def process_batch(self, commands):
         if self.is_processing_data:
@@ -289,11 +289,11 @@ class GCodeParser:
             self.is_processing_data = False
             if self.pending_commands or self.script_queue:
                 # process pending tty commands
-                self.process_pending()
+                self._process_pending()
             raise
         self.is_processing_data = False
         if self.pending_commands or self.script_queue:
-            self.process_pending()
+            self._process_pending()
         return True
     def run_script_from_command(self, script):
         prev_need_ack = self.need_ack
@@ -304,7 +304,7 @@ class GCodeParser:
     def run_script(self, script):
         self.script_queue.append(script)
         self.reactor.register_callback(
-            (lambda e, s=self: s.process_pending()))
+            (lambda e, s=self: s._process_pending()))
     # Response handling
     def ack(self, msg=None):
         if not self.need_ack or self.is_fileinput:
