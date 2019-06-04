@@ -160,6 +160,8 @@ The following standard commands are supported:
   for calibrating a Z position_endstop config setting. See the
   MANUAL_PROBE command for details on the parameters and the
   additional commands available while the tool is active.
+- `SET_IDLE_TIMEOUT [TIMEOUT=<timeout>]`:  Allows the user to set the
+  idle timeout (in seconds).
 - `RESTART`: This will cause the host software to reload its config
   and perform an internal reset. This command will not clear error
   state from the micro-controller (see FIRMWARE_RESTART) nor will it
@@ -173,6 +175,14 @@ The following standard commands are supported:
   calibration tests.
 - `STATUS`: Report the Klipper host software status.
 - `HELP`: Report the list of available extended G-Code commands.
+
+## G-Code Macro Commands
+
+The following command is available when a "gcode_macro" config section
+is enabled:
+- `SET_GCODE_VARIABLE MACRO=<macro_name> VARIABLE=<name>
+  VALUE=<value>`: This command allows one to change the value of a
+  gcode_macro variable at run-time.
 
 ## Custom Pin Commands
 
