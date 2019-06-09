@@ -27,11 +27,11 @@ class GCodeParser:
                                                       self._process_data)
         self.partial_input = ""
         self.pending_commands = []
-        self.script_queue = []
         self.bytes_read = 0
         self.input_log = collections.deque([], 50)
         # Command handling
         self.is_printer_ready = False
+        self.mutex = self.reactor.mutex()
         self.base_gcode_handlers = self.gcode_handlers = {}
         self.ready_gcode_handlers = {}
         self.mux_commands = {}
@@ -267,44 +267,16 @@ class GCodeParser:
                     self.fd_handle = None
                 return
         # Process commands
-        self._process_pending()
-    def _process_pending(self):
-        if self.is_processing_data:
-            return
         self.is_processing_data = True
-        while 1:
-            if self.pending_commands:
-                cmds = self.pending_commands
-                self.pending_commands = []
-                self._process_commands(cmds)
-            elif self.script_queue:
-                script = self.script_queue.pop(0)
-                try:
-                    self._process_commands(script.split('\n'), need_ack=False)
-                except Exception:
-                    logging.exception("Script Running Error")
-            else:
-                break
+        while pending_commands:
+            self.pending_commands = []
+            with self.mutex:
+                self._process_commands(pending_commands)
+            pending_commands = self.pending_commands
+        self.is_processing_data = False
         if self.fd_handle is None:
-            self.fd_handle = self.reactor.register_fd(
-                self.fd, self._process_data)
-        self.is_processing_data = False
-    def process_batch(self, commands):
-        if self.is_processing_data:
-            return False
-        self.is_processing_data = True
-        try:
-            self._process_commands(commands, need_ack=False)
-        except self.error as e:
-            self.is_processing_data = False
-            if self.pending_commands or self.script_queue:
-                # process pending tty commands
-                self._process_pending()
-            raise
-        self.is_processing_data = False
-        if self.pending_commands or self.script_queue:
-            self._process_pending()
-        return True
+            self.fd_handle = self.reactor.register_fd(self.fd,
+                                                      self._process_data)
     def run_script_from_command(self, script):
         prev_need_ack = self.need_ack
         try:
@@ -312,9 +284,10 @@ class GCodeParser:
         finally:
             self.need_ack = prev_need_ack
     def run_script(self, script):
-        self.script_queue.append(script)
-        self.reactor.register_callback(
-            (lambda e, s=self: s._process_pending()))
+        with self.mutex:
+            self._process_commands(script.split('\n'), need_ack=False)
+    def get_mutex(self):
+        return self.mutex
     # Response handling
     def ack(self, msg=None):
         if not self.need_ack or self.is_fileinput:
