@@ -76,12 +76,7 @@ class BedMesh:
         self.gcode.register_command(
             'BED_MESH_CLEAR', self.cmd_BED_MESH_CLEAR,
             desc=self.cmd_BED_MESH_CLEAR_help)
-        if config.has_section('bed_skew'):
-            bed_skew = self.printer.try_load_module(
-                config, 'bed_skew')
-            bed_skew.set_downstream_transform(self)
-        else:
-            self.gcode.set_move_transform(self)
+        self.gcode.set_move_transform(self)
     def handle_connect(self):
         self.toolhead = self.printer.lookup_object('toolhead')
         self.calibrate.load_default_profile()
@@ -120,8 +115,6 @@ class BedMesh:
         self.splitter.initialize(mesh)
         # cache the current position before a transform takes place
         self.gcode.reset_last_position()
-    def update_position(self, pos):
-        self.last_position[:] = pos
     def get_z_factor(self, z_pos):
         if z_pos >= self.fade_end:
             return 0.
