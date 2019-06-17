@@ -150,8 +150,9 @@ class TMCCommandHelper:
 
 # Endstop wrapper that enables "sensorless homing"
 class TMCVirtualEndstop:
-    def __init__(self, mcu_tmc, mcu_endstop):
+    def __init__(self, mcu_tmc, mcu_endstop, cur_helper):
         self.mcu_tmc = mcu_tmc
+        self.cur_helper = cur_helper
         self.fields = mcu_tmc.get_fields()
         self.mcu_endstop = mcu_endstop
         self.en_pwm = self.fields.get_field("en_pwm_mode")
@@ -165,23 +166,30 @@ class TMCVirtualEndstop:
         self.query_endstop_wait = self.mcu_endstop.query_endstop_wait
         self.TimeoutError = self.mcu_endstop.TimeoutError
     def home_prepare(self):
+        self.en_pwm = self.fields.get_field("en_pwm_mode")
         self.fields.set_field("en_pwm_mode", 0)
         val = self.fields.set_field("diag1_stall", 1)
         self.mcu_tmc.set_register("GCONF", val)
         self.mcu_tmc.set_register("TCOOLTHRS", 0xfffff)
+        if self.cur_helper is not None:
+            self.rc, self.hc, home_c = self.cur_helper.get_current()
+            self.cur_helper.set_current(home_c, home_c)
         self.mcu_endstop.home_prepare()
     def home_finalize(self):
         self.fields.set_field("en_pwm_mode", self.en_pwm)
         val = self.fields.set_field("diag1_stall", 0)
         self.mcu_tmc.set_register("GCONF", val)
         self.mcu_tmc.set_register("TCOOLTHRS", 0)
+        if self.cur_helper is not None:
+            self.cur_helper.set_current(self.rc, self.hc)
         self.mcu_endstop.home_finalize()
 
 class TMCEndstopHelper:
-    def __init__(self, config, mcu_tmc, diag_pin):
+    def __init__(self, config, mcu_tmc, diag_pin, cur_helper=None):
         self.printer = config.get_printer()
         self.mcu_tmc = mcu_tmc
         self.diag_pin = diag_pin
+        self.cur_helper = cur_helper
         name_parts = config.get_name().split()
         ppins = self.printer.lookup_object("pins")
         ppins.register_chip("%s_%s" % (name_parts[0], name_parts[-1]), self)
@@ -194,7 +202,7 @@ class TMCEndstopHelper:
         if pin_params['invert'] or pin_params['pullup']:
             raise ppins.error("Can not pullup/invert tmc virtual endstop")
         mcu_endstop = ppins.setup_pin('endstop', self.diag_pin)
-        return TMCVirtualEndstop(self.mcu_tmc, mcu_endstop)
+        return TMCVirtualEndstop(self.mcu_tmc, mcu_endstop, self.cur_helper)
 
 
 ######################################################################
@@ -225,13 +233,16 @@ class TMCMicrostepHelper:
 def TMCStealthchopHelper(config, mcu_tmc, tmc_freq):
     fields = mcu_tmc.get_fields()
     en_pwm_mode = False
-    velocity = config.getfloat('stealthchop_threshold', 0., minval=0.)
-    if velocity:
-        stepper_name = " ".join(config.get_name().split()[1:])
-        stepper_config = config.getsection(stepper_name)
-        step_dist = stepper_config.getfloat('step_distance')
-        step_dist_256 = step_dist / (1 << fields.get_field("MRES"))
-        threshold = int(tmc_freq * step_dist_256 / velocity + .5)
+    velocity = config.getfloat('stealthchop_threshold', None, minval=0.)
+    if velocity is not None:
+        if velocity:
+            stepper_name = " ".join(config.get_name().split()[1:])
+            stepper_config = config.getsection(stepper_name)
+            step_dist = stepper_config.getfloat('step_distance')
+            step_dist_256 = step_dist / (1 << fields.get_field("MRES"))
+            threshold = int(tmc_freq * step_dist_256 / velocity + .5)
+        else:
+            threshold = 0
         fields.set_field("TPWMTHRS", max(0, min(0xfffff, threshold)))
         en_pwm_mode = True
     reg = fields.lookup_register("en_pwm_mode", None)
