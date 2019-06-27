@@ -202,12 +202,14 @@ class MCU_TMC_SPI:
         params = self.spi.spi_transfer([reg, 0x00, 0x00, 0x00, 0x00])
         pr = bytearray(params['response'])
         return (pr[1] << 24) | (pr[2] << 16) | (pr[3] << 8) | pr[4]
-    def set_register(self, reg_name, val, print_time=0.):
-        min_clock = self.spi.get_mcu().print_time_to_clock(print_time)
+    def set_register(self, reg_name, val, print_time=None):
+        minclock = 0
+        if print_time is not None:
+            minclock = self.spi.get_mcu().print_time_to_clock(print_time)
         reg = Registers[reg_name]
         data = [(reg | 0x80) & 0xff, (val >> 24) & 0xff, (val >> 16) & 0xff,
                 (val >> 8) & 0xff, val & 0xff]
-        self.spi.spi_send(data, min_clock)
+        self.spi.spi_send(data, minclock)
 
 ######################################################################
 # TMC2130 extras
@@ -522,7 +524,7 @@ class TMC2130:
         tmc.TMCEndstopHelper(config, self.mcu_tmc, diag1_pin, cur_helper)
         # Register commands
         cmdhelper = tmc.TMCCommandHelper(config, self.mcu_tmc)
-        cmdhelper.setup_register_dump(self.query_registers)
+        cmdhelper.setup_register_dump(ReadRegisters)
         # Setup basic register values
         mh = tmc.TMCMicrostepHelper(config, self.mcu_tmc)
         self.get_microsteps = mh.get_microsteps
@@ -575,9 +577,6 @@ class TMC2130:
         set_config_field(config, "sfilt", False)
 
         TMC2130_EXTRA(config, self)
-    def query_registers(self, print_time=0.):
-        return [(reg_name, self.mcu_tmc.get_register(reg_name))
-                for reg_name in ReadRegisters]
 
 def load_config_prefix(config):
     return TMC2130(config)

@@ -169,7 +169,8 @@ class TMC2660CurrentHelper:
         return vsense, cs
 
     def handle_printing(self, print_time):
-        self.set_current(0., self.current) # workaround
+        print_time -= 0.100 # Schedule slightly before deadline
+        self.set_current(print_time, self.current)
 
     def handle_ready(self, print_time):
         self.set_current(print_time, (float(self.idle_current_percentage)
@@ -213,15 +214,17 @@ class MCU_TMC2660_SPI:
         val = self.fields.set_field("RDSEL", ReadRegisters.index(reg_name))
         if self.printer.get_start_args().get('debugoutput') is not None:
             return 0
-        params = self.spi.spi_transfer([((val >> 16) | reg) & 0xff,
-                                        (val >> 8) & 0xff, val & 0xff])
+        msg = [((val >> 16) | reg) & 0xff, (val >> 8) & 0xff, val & 0xff]
+        params = self.spi.spi_transfer(msg)
         pr = bytearray(params['response'])
         return (pr[0] << 16) | (pr[1] << 8) | pr[2]
-    def set_register(self, reg_name, val, print_time=0.):
-        min_clock = self.spi.get_mcu().print_time_to_clock(print_time)
+    def set_register(self, reg_name, val, print_time=None):
+        minclock = 0
+        if print_time is not None:
+            minclock = self.spi.get_mcu().print_time_to_clock(print_time)
         reg = self.name_to_reg[reg_name]
-        self.spi.spi_send([((val >> 16) | reg) & 0xff,
-                            (val >> 8) & 0xff, val & 0xff], min_clock)
+        msg = [((val >> 16) | reg) & 0xff, (val >> 8) & 0xff, val & 0xff]
+        self.spi.spi_send(msg, minclock)
 
 
 ######################################################################
@@ -236,7 +239,7 @@ class TMC2660:
         self.mcu_tmc = MCU_TMC2660_SPI(config, Registers, self.fields)
         # Register commands
         cmdhelper = tmc.TMCCommandHelper(config, self.mcu_tmc)
-        cmdhelper.setup_register_dump(self.query_registers)
+        cmdhelper.setup_register_dump(ReadRegisters)
 
         # DRVCTRL
         mh = tmc.TMCMicrostepHelper(config, self.mcu_tmc)
@@ -273,10 +276,6 @@ class TMC2660:
         set_config_field(config, "SLPL", 0)
         set_config_field(config, "DISS2G", 0)
         set_config_field(config, "TS2G", 3)
-
-    def query_registers(self, print_time=0.):
-        return [(reg_name, self.mcu_tmc.get_register(reg_name))
-                for reg_name in ReadRegisters]
 
 def load_config_prefix(config):
     return TMC2660(config)
