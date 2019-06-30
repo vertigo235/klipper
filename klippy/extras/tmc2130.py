@@ -13,9 +13,9 @@ Registers = {
     "TPOWERDOWN": 0x11, "TSTEP": 0x12, "TPWMTHRS": 0x13, "TCOOLTHRS": 0x14,
     "THIGH": 0x15, "XDIRECT": 0x2d, "MSLUT0": 0x60, "MSLUT1": 0x61,
     "MSLUT2": 0x62, "MSLUT3": 0x63, "MSLUT4": 0x64, "MSLUT5": 0x65,
-    "MSLUT6": 0x66, "MSLUT7": 0x67,"MSLUTSEL": 0x68, "MSLUTSTART": 0x69,
+    "MSLUT6": 0x66, "MSLUT7": 0x67, "MSLUTSEL": 0x68, "MSLUTSTART": 0x69,
     "MSCNT": 0x6a, "MSCURACT": 0x6b, "CHOPCONF": 0x6c, "COOLCONF": 0x6d,
-    "DCCTRL": 0x6e, "DRV_STATUS": 0x6f, "PWMCONF": 0x70, "PWM_SCALE": 0x71, 
+    "DCCTRL": 0x6e, "DRV_STATUS": 0x6f, "PWMCONF": 0x70, "PWM_SCALE": 0x71,
     "ENCM_CTRL": 0x72, "LOST_STEPS": 0x73,
 }
 
@@ -189,6 +189,7 @@ class TMCCurrentHelper:
 class MCU_TMC_SPI:
     def __init__(self, config, name_to_reg, fields):
         self.printer = config.get_printer()
+        self.mutex = self.printer.get_reactor().mutex()
         self.spi = bus.MCU_SPI_from_config(config, 3, default_speed=4000000)
         self.name_to_reg = name_to_reg
         self.fields = fields
@@ -196,10 +197,11 @@ class MCU_TMC_SPI:
         return self.fields
     def get_register(self, reg_name):
         reg = self.name_to_reg[reg_name]
-        self.spi.spi_send([reg, 0x00, 0x00, 0x00, 0x00])
-        if self.printer.get_start_args().get('debugoutput') is not None:
-            return 0
-        params = self.spi.spi_transfer([reg, 0x00, 0x00, 0x00, 0x00])
+        with self.mutex:
+            self.spi.spi_send([reg, 0x00, 0x00, 0x00, 0x00])
+            if self.printer.get_start_args().get('debugoutput') is not None:
+                return 0
+            params = self.spi.spi_transfer([reg, 0x00, 0x00, 0x00, 0x00])
         pr = bytearray(params['response'])
         return (pr[1] << 24) | (pr[2] << 16) | (pr[3] << 8) | pr[4]
     def set_register(self, reg_name, val, print_time=None):
@@ -209,7 +211,8 @@ class MCU_TMC_SPI:
         reg = Registers[reg_name]
         data = [(reg | 0x80) & 0xff, (val >> 24) & 0xff, (val >> 16) & 0xff,
                 (val >> 8) & 0xff, val & 0xff]
-        self.spi.spi_send(data, minclock)
+        with self.mutex:
+            self.spi.spi_send(data, minclock)
 
 ######################################################################
 # TMC2130 extras
@@ -519,9 +522,9 @@ class TMC2130:
         self.mcu_tmc = MCU_TMC_SPI(config, Registers, self.fields)
         # Setup Current
         cur_helper = TMCCurrentHelper(config, self.mcu_tmc)
-        # Allow virtual endstop to be created
+        # Allow virtual pins to be created
         diag1_pin = config.get('diag1_pin', None)
-        tmc.TMCEndstopHelper(config, self.mcu_tmc, diag1_pin, cur_helper)
+        tmc.TMCVirtualPinHelper(config, self.mcu_tmc, diag1_pin, cur_helper)
         # Register commands
         cmdhelper = tmc.TMCCommandHelper(config, self.mcu_tmc)
         cmdhelper.setup_register_dump(ReadRegisters)
@@ -534,7 +537,6 @@ class TMC2130:
         set_config_field = self.fields.set_config_field
         set_config_field(config, "toff", 4)
         set_config_field(config, "TBL", 1)
-        set_config_field(config, "intpol", True, "interpolate")
         set_config_field(config, "IHOLDDELAY", 8)
         set_config_field(config, "TPOWERDOWN", 0)
         set_config_field(config, "PWM_AMPL", 128)
@@ -555,7 +557,8 @@ class TMC2130:
             tfd = config.getint('driver_TFD', 0, minval=0, maxval=15)
             self.fields.set_field('hstrt', tfd)
             self.fields.set_field('fd3', (tfd >> 3) & 1)
-            set_config_field(config, "hend", 0, "driver_OFFSET")
+            hend = config.getint('driver_OFFSET', 0)
+            self.fields.set_field('hend', hend)
         set_config_field(config, "disfdcc", False)
         set_config_field(config, "rndtf", False)
         set_config_field(config, "vhighfs", False)

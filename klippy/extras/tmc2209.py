@@ -59,6 +59,8 @@ class TMC2209:
         self.fields = tmc.FieldHelper(Fields, tmc2208.SignedFields,
                                       FieldFormatters)
         self.mcu_tmc = tmc_uart.MCU_TMC_uart(config, Registers, self.fields)
+        # Allow virtual pins to be created
+        tmc.TMCVirtualPinHelper(config, self.mcu_tmc)
         # Register commands
         cmdhelper = tmc.TMCCommandHelper(config, self.mcu_tmc)
         cmdhelper.setup_register_dump(ReadRegisters)
@@ -77,7 +79,6 @@ class TMC2209:
         set_config_field(config, "hstrt", 5)
         set_config_field(config, "hend", 0)
         set_config_field(config, "TBL", 2)
-        set_config_field(config, "intpol", True, "interpolate")
         set_config_field(config, "IHOLDDELAY", 8)
         set_config_field(config, "TPOWERDOWN", 20)
         set_config_field(config, "PWM_OFS", 36)

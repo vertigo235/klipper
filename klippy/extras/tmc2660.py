@@ -19,11 +19,11 @@ Fields = {}
 Fields["DRVCTRL"] = {
     "MRES": 0x0f,
     "DEDGE": 0x01 << 8,
-    "INTPOL": 0x01 << 9,
+    "intpol": 0x01 << 9,
 }
 
 Fields["CHOPCONF"] = {
-    "TOFF": 0x0f,
+    "toff": 0x0f,
     "HSTRT": 0x7 << 4,
     "HEND": 0x0f << 7,
     "HDEC": 0x03 << 11,
@@ -100,8 +100,8 @@ FieldFormatters = {
     "MRES": (lambda v: "%d(%dusteps)" % (v, 0x100 >> v)),
     "DEDGE": (lambda v:
         "1(Both Edges Active)" if v else "0(Only Rising Edge active)"),
-    "INTPOL": (lambda v: "1(On)" if v else "0(Off)"),
-    "TOFF": (lambda v: ("%d" % v) if v else "0(Driver Disabled!)"),
+    "intpol": (lambda v: "1(On)" if v else "0(Off)"),
+    "toff": (lambda v: ("%d" % v) if v else "0(Driver Disabled!)"),
     "CHM": (lambda v: "1(constant toff)" if v else "0(spreadCycle)"),
     "SFILT": (lambda v: "1(Filtered mode)" if v else "0(Standard mode)"),
     "VSENSE": (lambda v: "%d(%dmV)" % (v, 165 if v else 305)),
@@ -170,11 +170,13 @@ class TMC2660CurrentHelper:
 
     def handle_printing(self, print_time):
         print_time -= 0.100 # Schedule slightly before deadline
-        self.set_current(print_time, self.current)
+        self.printer.get_reactor().register_callback(
+            (lambda ev: self.set_current(print_time, self.current)))
 
     def handle_ready(self, print_time):
-        self.set_current(print_time, (float(self.idle_current_percentage)
-                                      * self.current / 100))
+        current = self.current * float(self.idle_current_percentage) / 100.
+        self.printer.get_reactor().register_callback(
+            (lambda ev: self.set_current(print_time, current)))
 
     def set_current(self, print_time, current):
         vsense, cs = self._calc_current(current)
@@ -204,6 +206,7 @@ class TMC2660CurrentHelper:
 class MCU_TMC2660_SPI:
     def __init__(self, config, name_to_reg, fields):
         self.printer = config.get_printer()
+        self.mutex = self.printer.get_reactor().mutex()
         self.spi = bus.MCU_SPI_from_config(config, 0, default_speed=4000000)
         self.name_to_reg = name_to_reg
         self.fields = fields
@@ -215,7 +218,8 @@ class MCU_TMC2660_SPI:
         if self.printer.get_start_args().get('debugoutput') is not None:
             return 0
         msg = [((val >> 16) | reg) & 0xff, (val >> 8) & 0xff, val & 0xff]
-        params = self.spi.spi_transfer(msg)
+        with self.mutex:
+            params = self.spi.spi_transfer(msg)
         pr = bytearray(params['response'])
         return (pr[0] << 16) | (pr[1] << 8) | pr[2]
     def set_register(self, reg_name, val, print_time=None):
@@ -224,7 +228,8 @@ class MCU_TMC2660_SPI:
             minclock = self.spi.get_mcu().print_time_to_clock(print_time)
         reg = self.name_to_reg[reg_name]
         msg = [((val >> 16) | reg) & 0xff, (val >> 8) & 0xff, val & 0xff]
-        self.spi.spi_send(msg, minclock)
+        with self.mutex:
+            self.spi.spi_send(msg, minclock)
 
 
 ######################################################################
@@ -237,6 +242,8 @@ class TMC2660:
         self.fields = tmc.FieldHelper(Fields, SignedFields, FieldFormatters)
         self.fields.set_field("SDOFF", 0) # Access DRVCTRL in step/dir mode
         self.mcu_tmc = MCU_TMC2660_SPI(config, Registers, self.fields)
+        # Allow virtual pins to be created
+        tmc.TMCVirtualPinHelper(config, self.mcu_tmc)
         # Register commands
         cmdhelper = tmc.TMCCommandHelper(config, self.mcu_tmc)
         cmdhelper.setup_register_dump(ReadRegisters)
@@ -245,16 +252,15 @@ class TMC2660:
         mh = tmc.TMCMicrostepHelper(config, self.mcu_tmc)
         self.get_microsteps = mh.get_microsteps
         self.get_phase = mh.get_phase
-        set_config_field = self.fields.set_config_field
-        set_config_field(config, "INTPOL", True, 'interpolate')
         # CHOPCONF
+        set_config_field = self.fields.set_config_field
         set_config_field(config, "TBL", 2)
         set_config_field(config, "RNDTF", 0)
         set_config_field(config, "HDEC", 0)
         set_config_field(config, "CHM", 0)
         set_config_field(config, "HEND", 3)
         set_config_field(config, "HSTRT", 3)
-        set_config_field(config, "TOFF", 4)
+        set_config_field(config, "toff", 4)
         if not self.fields.get_field("CHM"):
             if (self.fields.get_field("HSTRT") +
                 self.fields.get_field("HEND")) > 15:
