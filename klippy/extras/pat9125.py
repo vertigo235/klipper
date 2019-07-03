@@ -182,7 +182,7 @@ class PAT9125(BaseSensor):
 
         self.tracker = MotionTracker(config, self)
         self.sensor_mode = DetectMode["OFF"]
-        self.detect_enabled = True
+        self.detect_enabled = self.sensor_enabled = True
         self.initialized = False
         self.e_step_dist = 1.
         self.pat9125_state = {
@@ -198,14 +198,17 @@ class PAT9125(BaseSensor):
             "QUERY_FILAMENT_SENSOR", "SENSOR", self.name,
             self.cmd_QUERY_FILAMENT_SENSOR,
             desc=self.cmd_QUERY_FILAMENT_SENSOR_help)
+        self.gcode.register_mux_command(
+            "SET_FILAMENT_SENSOR", "SENSOR", self.name,
+            self.cmd_SET_FILAMENT_SENSOR,
+            desc=self.cmd_SET_FILAMENT_SENSOR_help)
     def _handle_ready(self):
-        super(PAT9125, self)._handle_ready()
         self._init_stepper()
         self._pat9125_init()
         if self.insert_enabled:
             self.set_mode("INSERT")
     def _handle_restart(self, print_time):
-        # stop the pat9125 query timer
+        # stop the pat9125 mcu timer
         self.detect_enabled = False
         self.insert_enabled = False
         self.runout_enabled = False
@@ -405,6 +408,8 @@ class PAT9125(BaseSensor):
             msg += "\nAverage Brightness: %d Laser Shutter Time: %d" % (
                 state['FRAME'], state['SHUTTER'])
         self.gcode.respond_info(msg)
+    def cmd_SET_FILAMENT_SENSOR(self, params):
+        self.sensor_enabled = self.gcode.get_int("ENABLE", params, 1)
 
 XYE_KEYS = ['X_POS', 'Y_POS', 'STEPPER_POS']
 
@@ -466,9 +471,8 @@ class MotionTracker:
             self.need_xye_init = False
             return
 
-        # XXX - logging below for debugging purposes
-        # logging.info("PAT9125 status:\n%s" % (str(pat9125_state)))
-        # logging.info("Delta: %s" % (str(delta)))
+        if not self.pat9125.sensor_enabled:
+            return
 
         if self.pat9125.runout_enabled:
             if eventtime - self.last_event_time < self.event_delay:
