@@ -208,14 +208,9 @@ class PrusaGcodes:
         start_pos[2] = self.z_rail.position_min
         move_pos[2] = 220.0
         toolhead.set_position(start_pos, homing_axes=[2])
-        move_d = abs(220.0 - self.z_rail.position_min)
-        est_steps = sum([move_d / s.get_step_dist()
-                        for s in self.z_rail.get_steppers()])
-        dwell_t = est_steps * homing.HOMING_STEP_DELAY
         home = homing.Homing(self.printer)
         try:
-            home.homing_move(move_pos, [self.tmc_z_endstop], speed,
-                             dwell_t=dwell_t)
+            home.homing_move(move_pos, [self.tmc_z_endstop], speed)
         except homing.EndstopError as e:
             reason = str(e)
             raise self.gcode.error(reason)
