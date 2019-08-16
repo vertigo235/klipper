@@ -191,6 +191,18 @@ The following command is available when an "output_pin" config section
 is enabled:
 - `SET_PIN PIN=config_name VALUE=<value>`
 
+## Neopixel and Dotstar Commands
+
+The following command is available when "neopixel" or "dotstar" config
+sections are enabled:
+- `SET_LED LED=<config_name> INDEX=<index> RED=<value> GREEN=<value>
+  BLUE=<value>`: This sets the LED output. Each color <value> must be
+  between 0.0 and 1.0. If multiple LED chips are daisy-chained then
+  one may specify INDEX to alter the color of just the given chip (1
+  for the first chip, 2 for the second, etc.). If INDEX is not
+  provided then all LEDs in the daisy-chain will be set to the
+  provided color.
+
 ## Servo Commands
 
 The following commands are available when a "servo" config section is
