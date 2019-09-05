@@ -201,9 +201,9 @@ The test was last run on commit `9f3517fd` with gcc version
 stepper result is `SET ticks 345`, the best dual stepper result is
 `SET ticks 365`, and the best three stepper result is `SET ticks 606`.
 
-### STM32F446 step rate benchmark ###
+### STM32F4 step rate benchmark ###
 
-The following configuration sequence is used on the STM32F446:
+The following configuration sequence is used on the STM32F4:
 ```
 allocate_oids count=4
 config_stepper oid=0 step_pin=PA5 dir_pin=PB5 min_stop_interval=0 invert_step=0
@@ -213,11 +213,16 @@ config_stepper oid=3 step_pin=PB3 dir_pin=PB8 min_stop_interval=0 invert_step=0
 finalize_config crc=0
 ```
 
-The test was last run on commit `1487f8a2` with gcc version
-`arm-none-eabi-gcc (Fedora 7.4.0-1.fc30) 7.4.0`. The best single
-stepper result is `SET ticks 757`, the best dual stepper result is
-`SET ticks 761`, the best three stepper result is `SET ticks 757`, and
-the best four stepper result is `SET ticks 767`.
+The test was last run on commit `c380d463` with gcc version
+`arm-none-eabi-gcc (Fedora 7.4.0-1.fc30) 7.4.0`. For the STM32F446 the
+best single stepper result is `SET ticks 757`, the best dual stepper
+result is `SET ticks 761`, the best three stepper result is `SET ticks
+757`, and the best four stepper result is `SET ticks 767`. The
+STM32F407 results were obtained by running an STM32F407 binary on an
+STM32F446 (and thus using a 168Mhz clock) - the best single stepper
+result is `SET ticks 709`, the best dual stepper result is `SET ticks
+714`, the best three stepper result is `SET ticks 709`, and the best
+four stepper result is `SET ticks 729`.
 
 ### LPC176x step rate benchmark ###
 
@@ -298,11 +303,11 @@ class machine.
 | MCU                 | Rate | Build    | Build compiler      |
 | ------------------- | ---- | -------- | ------------------- |
 | pru (shared memory) |   5K | b161a69e | pru-gcc (GCC) 8.0.0 20170530 (experimental) |
+| stm32f042 (CAN)     |  18K | c105adc8 | arm-none-eabi-gcc (GNU Tools 7-2018-q3-update) 7.3.1 |
 | atmega2560 (serial) |  23K | b161a69e | avr-gcc (GCC) 4.8.1 |
 | sam3x8e (serial)    |  23K | b161a69e | arm-none-eabi-gcc (Fedora 7.1.0-5.fc27) 7.1.0 |
 | at90usb1286 (USB)   |  75K | b161a69e | avr-gcc (GCC) 4.8.1 |
 | samd21 (USB)        | 238K | b161a69e | arm-none-eabi-gcc (Fedora 7.1.0-5.fc27) 7.1.0 |
-| stm32f042 (CAN)     |  18K | c105adc8 | arm-none-eabi-gcc (GNU Tools 7-2018-q3-update) 7.3.1 |
 | stm32f103 (USB)     | 335K | b161a69e | arm-none-eabi-gcc (Fedora 7.1.0-5.fc27) 7.1.0 |
 | sam3x8e (USB)       | 450K | a5aede52 | arm-none-eabi-gcc (Fedora 7.1.0-5.fc27) 7.1.0 |
 | lpc1768 (USB)       | 546K | b161a69e | arm-none-eabi-gcc (Fedora 7.1.0-5.fc27) 7.1.0 |
