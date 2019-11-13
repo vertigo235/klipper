@@ -236,7 +236,7 @@ class TMCVirtualEndstop:
         self.mcu_endstop.home_finalize()
 
 class TMCVirtualPinHelper:
-    def __init__(self, config, mcu_tmc, diag_pin=None, cur_helper=None):
+    def __init__(self, config, mcu_tmc, diag_pin, cur_helper=None):
         self.printer = config.get_printer()
         self.mcu_tmc = mcu_tmc
         self.diag_pin = diag_pin
