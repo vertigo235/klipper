@@ -522,6 +522,8 @@ class TMC2130:
         self.mcu_tmc = MCU_TMC_SPI(config, Registers, self.fields)
         # Setup Current
         cur_helper = TMCCurrentHelper(config, self.mcu_tmc)
+        self.get_current = cur_helper.get_current
+        self.set_current = cur_helper.set_current
         # Allow virtual pins to be created
         diag1_pin = config.get('diag1_pin', None)
         tmc.TMCVirtualPinHelper(config, self.mcu_tmc, diag1_pin, cur_helper)

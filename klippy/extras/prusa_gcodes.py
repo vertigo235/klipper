@@ -29,7 +29,7 @@ class PrusaGcodes:
             'UNLOAD_FILAMENT': False,
             'M900': False,
             'GET_AMBIENT_TEMP': False,
-            'TIMED_GCODE': True,
+            'TIMED_GCODE': False,
             'TRAM_Z': False}
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
@@ -86,21 +86,17 @@ class PrusaGcodes:
         self.printer.register_event_handler("klippy:ready",
                                             self.handle_ready)
     def handle_ready(self):
-        try:
-            self.display = self.printer.lookup_object('display')
-        except:
-            self.display = None
-            self.gcode.respond_info("Display not added to config")
+        self.display = self.printer.lookup_object('display', None)
     def build_config(self):
-        if self.supported_gcodes['TRAM_Z'] and self.tmc_z_endstop:
+        if self.supported_gcodes['TRAM_Z'] and self.tmc_z_endstop is not None:
             kin = self.printer.lookup_object('toolhead').get_kinematics()
             self.z_rail = kin.rails[2]
-            if self.z_rail.name != 'z':
-                self.z_rail = None
-            else:
-                for stepper in self.z_rail.get_steppers():
-                    stepper.add_to_endstop(self.tmc_z_endstop[0])
+            for stepper in self.z_rail.get_steppers():
+                self.tmc_z_endstop[0].add_stepper(stepper)
     def _setup_virtual_z_endstop(self, config):
+        if config.getsection('printer').get('kinematics') != 'cartesian':
+            # TRAM_Z only supports cartesian printers
+            return
         if config.has_section('stepper_z'):
             z_config = config.getsection('stepper_z')
             endstop = z_config.get('endstop_pin')
@@ -190,6 +186,7 @@ class PrusaGcodes:
             return
         toolhead = self.printer.lookup_object('toolhead')
         z_tmc2130 = self.printer.lookup_object('tmc2130 stepper_z')
+        rc, hc, hold = z_tmc2130.get_current()
         event_time = self.reactor.monotonic()
         status = toolhead.get_status(event_time)
         if status['status'] == "Printing":
@@ -216,8 +213,7 @@ class PrusaGcodes:
             raise self.gcode.error(reason)
         toolhead.wait_moves()
         if self.tram_current is not None:
-            z_tmc2130.set_current_regs(
-                self.tram_current, z_tmc2130.hold_current)
+            z_tmc2130.set_current(self.tram_current, hc)
         # Move up 10mm for tramming
         next_pos = toolhead.get_position()
         next_pos[2] += 10
@@ -225,10 +221,9 @@ class PrusaGcodes:
         next_pos[2] -= 50
         toolhead.move(next_pos, 10.)
         toolhead.wait_moves()
-        toolhead.motor_off()
+        self.gcode.run_script_from_command("M84")
         if self.tram_current is not None:
-            z_tmc2130.set_current_regs(
-                z_tmc2130.run_current, z_tmc2130.hold_current)
+            z_tmc2130.set_current(rc, hc)
         self.z_rail.position_max = homing_max
     cmd_M900_help = "Enable/Disable pressure advance"
     def cmd_M900(self, params):
