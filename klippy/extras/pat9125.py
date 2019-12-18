@@ -352,7 +352,7 @@ class PAT9125(BaseSensor):
     def set_stepper(self, stepper):
         # XXX - need to add get_oid to stepper class
         self.e_step_dist = stepper.get_step_dist()
-        self.stepper_oid = stepper.mcu_stepper.get_oid()
+        self.stepper_oid = stepper.get_oid()
         self.tracker.set_runout_limits(self.e_step_dist)
     def set_mode(self, new_mode):
         if (self.sensor_mode == DetectMode[new_mode] or
