@@ -133,6 +133,7 @@ class PAT9125_I2C:
             logging.info("pat9125: Timeout waiting for response")
             return False
 
+
 DetectMode = {"OFF": 0, "RUNOUT": 1, "INSERT": 2}
 
 class PAT9125(BaseSensor):
@@ -231,8 +232,6 @@ class PAT9125(BaseSensor):
         # XXX - need to add get_stepper() function to extruder class
         # and manual stepper class
         stepper = None
-        if self.stepper_name == "extruder":
-            self.stepper_name = "extruder0"
         obj = self.printer.lookup_object(self.stepper_name, None)
         if obj is not None and hasattr(obj, "stepper"):
             stepper = obj.stepper
@@ -410,6 +409,7 @@ class PAT9125(BaseSensor):
         self.gcode.respond_info(msg)
     def cmd_SET_FILAMENT_SENSOR(self, params):
         self.sensor_enabled = self.gcode.get_int("ENABLE", params, 1)
+
 
 XYE_KEYS = ['X_POS', 'Y_POS', 'STEPPER_POS']
 
