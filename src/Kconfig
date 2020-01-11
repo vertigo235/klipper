@@ -127,6 +127,10 @@ config HAVE_GPIO_BITBANGING
 config HAVE_CHIPID
     bool
     default n
+config HAVE_PAT9125
+    depends on HAVE_GPIO && HAVE_GPIO_I2C
+    bool
+    default y
 
 config INLINE_STEPPER_HACK
     # Enables gcc to inline stepper_event() into the main timer irq handler
