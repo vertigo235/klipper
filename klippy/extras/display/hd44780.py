@@ -55,8 +55,9 @@ class HD44780:
         # invalidate old data of one row every 5 seconds.  This will
         # force a new data refesh, compensating for stray characters
         # as the HD44780 is prone to noise.
-        i = self.refresh_row * 20
-        self.all_framebuffers[0][1][i:i+20] = bytearray('~'*20)
+        buf = self.refresh_row / 2
+        i = (buf % 2) * 20
+        self.all_framebuffers[buf][1][i:i+20] = bytearray('~'*20)
         # set next row
         self.refresh_row = (self.refresh_row + 1) % 4
         return eventtime + 5.
