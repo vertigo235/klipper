@@ -115,10 +115,6 @@ i2c_read(struct i2c_config config, uint8_t reg_len, uint8_t *reg
          , uint8_t read_len, uint8_t *read)
 {
     uint32_t timeout = timer_read_time() + timer_from_us(5000);
-
-    /* See page 7 in this helpful document from TI about I2C:
-     * http://www.ti.com/lit/an/slva704/slva704.pdf
-     */
     i2c_start(timeout);
     i2c_send_byte(config.addr, timeout);
     while (reg_len--)
