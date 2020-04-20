@@ -182,13 +182,30 @@ class TMCCommandHelper:
 # TMC virtual pins
 ######################################################################
 
-# Endstop wrapper that enables "sensorless homing"
-class TMCVirtualEndstop:
-    def __init__(self, mcu_tmc, mcu_endstop, cur_helper):
+# Helper class for "sensorless homing"
+class TMCVirtualPinHelper:
+    def __init__(self, config, mcu_tmc, diag_pin):
+        self.printer = config.get_printer()
         self.mcu_tmc = mcu_tmc
-        self.cur_helper = cur_helper
         self.fields = mcu_tmc.get_fields()
-        self.mcu_endstop = mcu_endstop
+        self.diag_pin = diag_pin
+        self.mcu_endstop = None
+        self.en_pwm = False
+        self.pwmthrs = 0
+        # Register virtual_endstop pin
+        name_parts = config.get_name().split()
+        ppins = self.printer.lookup_object("pins")
+        ppins.register_chip("%s_%s" % (name_parts[0], name_parts[-1]), self)
+    def setup_pin(self, pin_type, pin_params):
+        # Validate pin
+        ppins = self.printer.lookup_object('pins')
+        if pin_type != 'endstop' or pin_params['pin'] != 'virtual_endstop':
+            raise ppins.error("tmc virtual endstop only useful as endstop")
+        if pin_params['invert'] or pin_params['pullup']:
+            raise ppins.error("Can not pullup/invert tmc virtual pin")
+        if self.diag_pin is None:
+            raise ppins.error("tmc virtual endstop requires diag pin config")
+        # Setup for sensorless homing
         reg = self.fields.lookup_register("en_pwm_mode", None)
         if reg is None:
             self.en_pwm = not self.fields.get_field("en_spreadCycle")
@@ -196,16 +213,15 @@ class TMCVirtualEndstop:
         else:
             self.en_pwm = self.fields.get_field("en_pwm_mode")
             self.pwmthrs = 0
-        # Wrappers
-        self.get_mcu = self.mcu_endstop.get_mcu
-        self.add_stepper = self.mcu_endstop.add_stepper
-        self.get_steppers = self.mcu_endstop.get_steppers
-        self.home_start = self.mcu_endstop.home_start
-        self.home_wait = self.mcu_endstop.home_wait
-        self.query_endstop = self.mcu_endstop.query_endstop
-        self.TimeoutError = self.mcu_endstop.TimeoutError
-    def home_prepare(self):
-        self.en_pwm = self.fields.get_field("en_pwm_mode")
+        self.printer.register_event_handler("homing:homing_move_begin",
+                                            self.handle_homing_move_begin)
+        self.printer.register_event_handler("homing:homing_move_end",
+                                            self.handle_homing_move_end)
+        self.mcu_endstop = ppins.setup_pin('endstop', self.diag_pin)
+        return self.mcu_endstop
+    def handle_homing_move_begin(self, endstops):
+        if self.mcu_endstop not in endstops:
+            return
         reg = self.fields.lookup_register("en_pwm_mode", None)
         if reg is None:
             # On "stallguard4" drivers, "stealthchop" must be enabled
@@ -217,11 +233,9 @@ class TMCVirtualEndstop:
             val = self.fields.set_field("diag1_stall", 1)
         self.mcu_tmc.set_register("GCONF", val)
         self.mcu_tmc.set_register("TCOOLTHRS", 0xfffff)
-        if self.cur_helper is not None:
-            self.rc, self.hc, home_c = self.cur_helper.get_current()
-            self.cur_helper.set_current(home_c, home_c)
-        self.mcu_endstop.home_prepare()
-    def home_finalize(self):
+    def handle_homing_move_end(self, endstops):
+        if self.mcu_endstop not in endstops:
+            return
         reg = self.fields.lookup_register("en_pwm_mode", None)
         if reg is None:
             self.mcu_tmc.set_register("TPWMTHRS", self.pwmthrs)
@@ -231,29 +245,6 @@ class TMCVirtualEndstop:
             val = self.fields.set_field("diag1_stall", 0)
         self.mcu_tmc.set_register("GCONF", val)
         self.mcu_tmc.set_register("TCOOLTHRS", 0)
-        if self.cur_helper is not None:
-            self.cur_helper.set_current(self.rc, self.hc)
-        self.mcu_endstop.home_finalize()
-
-class TMCVirtualPinHelper:
-    def __init__(self, config, mcu_tmc, diag_pin, cur_helper=None):
-        self.printer = config.get_printer()
-        self.mcu_tmc = mcu_tmc
-        self.diag_pin = diag_pin
-        self.cur_helper = cur_helper
-        name_parts = config.get_name().split()
-        ppins = self.printer.lookup_object("pins")
-        ppins.register_chip("%s_%s" % (name_parts[0], name_parts[-1]), self)
-    def setup_pin(self, pin_type, pin_params):
-        ppins = self.printer.lookup_object('pins')
-        if pin_type != 'endstop' or pin_params['pin'] != 'virtual_endstop':
-            raise ppins.error("tmc virtual endstop only useful as endstop")
-        if pin_params['invert'] or pin_params['pullup']:
-            raise ppins.error("Can not pullup/invert tmc virtual pin")
-        if self.diag_pin is None:
-            raise ppins.error("tmc virtual endstop requires diag pin config")
-        mcu_endstop = ppins.setup_pin('endstop', self.diag_pin)
-        return TMCVirtualEndstop(self.mcu_tmc, mcu_endstop, self.cur_helper)
 
 
 ######################################################################
@@ -285,16 +276,13 @@ class TMCMicrostepHelper:
 def TMCStealthchopHelper(config, mcu_tmc, tmc_freq):
     fields = mcu_tmc.get_fields()
     en_pwm_mode = False
-    velocity = config.getfloat('stealthchop_threshold', None, minval=0.)
-    if velocity is not None:
-        if velocity:
-            stepper_name = " ".join(config.get_name().split()[1:])
-            stepper_config = config.getsection(stepper_name)
-            step_dist = stepper_config.getfloat('step_distance')
-            step_dist_256 = step_dist / (1 << fields.get_field("MRES"))
-            threshold = int(tmc_freq * step_dist_256 / velocity + .5)
-        else:
-            threshold = 0
+    velocity = config.getfloat('stealthchop_threshold', 0., minval=0.)
+    if velocity:
+        stepper_name = " ".join(config.get_name().split()[1:])
+        stepper_config = config.getsection(stepper_name)
+        step_dist = stepper_config.getfloat('step_distance')
+        step_dist_256 = step_dist / (1 << fields.get_field("MRES"))
+        threshold = int(tmc_freq * step_dist_256 / velocity + .5)
         fields.set_field("TPWMTHRS", max(0, min(0xfffff, threshold)))
         en_pwm_mode = True
     reg = fields.lookup_register("en_pwm_mode", None)

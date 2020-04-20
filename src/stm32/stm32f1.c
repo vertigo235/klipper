@@ -140,8 +140,8 @@ clock_setup(void)
         cfgr = ((0 << RCC_CFGR_PLLSRC_Pos)
                 | ((div2 - 2) << RCC_CFGR_PLLMULL_Pos));
     }
-    RCC->CFGR = (cfgr | RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_PPRE2_DIV2
-                 | RCC_CFGR_ADCPRE_DIV4);
+    cfgr |= RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_PPRE2_DIV2 | RCC_CFGR_ADCPRE_DIV4;
+    RCC->CFGR = cfgr;
     RCC->CR |= RCC_CR_PLLON;
 
     // Set flash latency
@@ -164,6 +164,11 @@ armcm_main(void)
     // Run SystemInit() and then restore VTOR
     SystemInit();
     SCB->VTOR = (uint32_t)VectorTable;
+
+    // Reset peripheral clocks (for some bootloaders that don't)
+    RCC->AHBENR = 0x14;
+    RCC->APB1ENR = 0;
+    RCC->APB2ENR = 0;
 
     // Setup clocks
     clock_setup();
