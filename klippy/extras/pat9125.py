@@ -8,7 +8,7 @@ import bus
 import logging
 import threading
 import collections
-from filament_switch_sensor import BaseSensor
+from filament_switch_sensor import RunoutHelper
 import kinematics.extruder
 
 CHIP_ADDR = 0x75
@@ -70,23 +70,32 @@ class PAT9125_I2C:
         self.write_verify_request = None
         self.write_verify_timer = self.reactor.register_timer(
             self._write_verify_request_event)
+
     def build_config(self):
+        # XXX - As noted below, it should now be possible
+        # to use Klipper's "lookup_query_command" with the same
+        # command queue used for other i2c comms.  By doing so
+        # we should not need to register and handle our own response
         self.pat9125_write_verify_cmd = self.mcu.lookup_command(
             "command_pat9125_write_verify oid=%c sequence=%*s retries=%u",
             cq=self.get_command_queue())
         self.mcu.register_response(
             self._response_handler, "pat9125_verify_response", self.oid)
+
     def _write_verify_request_event(self, eventtime):
         if self.write_verify_response is not None:
             return self.reactor.NEVER
         self.pat9125_write_verify_cmd.send(
             self.write_verify_request)
         return eventtime + self.RETRY_TIME
+
     def _response_handler(self, params):
         if params['#sent_time'] >= self.last_query_time:
             self.write_verify_response = params['success']
+
     def get_oid(self):
         return self.oid
+
     def read_register(self, reg, read_len):
         # return data from from a register. reg may be a named
         # register, an 8-bit address, or a list containing the address
@@ -98,6 +107,7 @@ class PAT9125_I2C:
             regs = [reg]
         params = self.i2c.i2c_read(regs, read_len)
         return bytearray(params['response'])
+
     def write_register(self, reg, data, minclock=0, reqclock=0):
         # Write data to a register. Reg may be a named
         # register or an 8-bit address.  Data may be a list
@@ -114,7 +124,12 @@ class PAT9125_I2C:
         else:
             out_data.insert(0, reg)
         self.i2c.i2c_write(out_data, minclock, reqclock)
+
     def write_verify_sequence(self, sequence, retries=5):
+        # XXX - We may be able to use the new mcu "lookup_query_command"
+        # now instead of creating this custom response handler.  It is
+        # possible to set our own command queue with it
+        #
         # do a register read/write.  We need to handle our own response
         # because 'send_with_response' uses a different command queue
         # that alters the order of commands sent
@@ -133,13 +148,20 @@ class PAT9125_I2C:
             logging.info("pat9125: Timeout waiting for response")
             return False
 
-
 DetectMode = {"OFF": 0, "RUNOUT": 1, "INSERT": 2}
 
-class PAT9125(BaseSensor):
+class PAT9125:
     def __init__(self, config):
-        super(PAT9125, self).__init__(config)
+        self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
+        self.gcode = self.printer.lookup_object('gcode')
+        self.name = config.get_name().split()[-1]
+
+        # Set up and patch the runout helper
+        self.runout_helper = RunoutHelper(config)
+        self.runout_enabled = False
+        self.insert_enabled = self.runout_helper.insert_gcode is not None
+
         self.pat9125_i2c = PAT9125_I2C(config)
         self.mcu = self.pat9125_i2c.get_mcu()
         self.mcu.register_config_callback(self._build_config)
@@ -148,7 +170,7 @@ class PAT9125(BaseSensor):
         self.i2c_oid = self.pat9125_i2c.get_i2c_oid()
         self.printer.register_event_handler("klippy:ready", self._handle_ready)
         self.printer.register_event_handler(
-            "gcode:request_restart", self._handle_restart)
+            "klippy:disconnect", self._handle_disconnect)
 
         self.stepper_name = config.get("stepper", "extruder").lower()
         if not config.has_section(self.stepper_name):
@@ -159,7 +181,7 @@ class PAT9125(BaseSensor):
         self.pat9125_start_update_cmd = None
         self.pat9125_stop_update_cmd = None
 
-        # TODO: Calculate a sane default for runout_refresh_time using the
+        # XXX - Calculate a sane default for runout_refresh_time using the
         # nozzle size and cross section.We want to be able to poll fast enough
         # to cover .2mm - .5mm of filament movement at the maximum possible
         # extrusion speed. For example, extruding PLA with a .4 nozzle at
@@ -183,7 +205,7 @@ class PAT9125(BaseSensor):
 
         self.tracker = MotionTracker(config, self)
         self.sensor_mode = DetectMode["OFF"]
-        self.detect_enabled = self.sensor_enabled = True
+        self.detect_enabled = True
         self.initialized = False
         self.e_step_dist = 1.
         self.pat9125_state = {
@@ -195,29 +217,42 @@ class PAT9125(BaseSensor):
             'MOTION': False
         }
 
+        self.printer.register_event_handler(
+            "idle_timeout:idle", self._handle_idle_state)
+        self.printer.register_event_handler(
+            "idle_timeout:ready", self._handle_idle_state)
+        self.printer.register_event_handler(
+            "idle_timeout:printing", self._handle_printing_state)
+
         self.gcode.register_mux_command(
-            "QUERY_FILAMENT_SENSOR", "SENSOR", self.name,
-            self.cmd_QUERY_FILAMENT_SENSOR,
-            desc=self.cmd_QUERY_FILAMENT_SENSOR_help)
-        self.gcode.register_mux_command(
-            "SET_FILAMENT_SENSOR", "SENSOR", self.name,
-            self.cmd_SET_FILAMENT_SENSOR,
-            desc=self.cmd_SET_FILAMENT_SENSOR_help)
+            "QUERY_PAT9125", "SENSOR", self.name,
+            self.cmd_QUERY_PAT9125,
+            desc=self.cmd_QUERY_PAT9125_help,)
+
+    def _handle_printing_state(self, eventtime):
+        runout_en = self.runout_helper.runout_gcode is not None
+        self.set_enable(runout_en, False)
+
+    def _handle_idle_state(self, eventtime):
+        insert_en = self.runout_helper.insert_gcode is not None
+        self.set_enable(False, insert_en)
+
     def _handle_ready(self):
         self._init_stepper()
         self._pat9125_init()
         if self.insert_enabled:
             self.set_mode("INSERT")
-    def _handle_restart(self, print_time):
+
+    def _handle_disconnect(self):
         # stop the pat9125 mcu timer
         self.detect_enabled = False
-        self.insert_enabled = False
-        self.runout_enabled = False
+        self.runout_helper.sensor_enabled = False
         try:
             self.set_mode("OFF")
         except Exception as e:
             logging.info("pat9125: Error attempting to stop on restart")
             logging.info(str(e))
+
     def _build_config(self):
         self.mcu.add_config_cmd(
             "command_config_pat9125 oid=%d i2c_oid=%d oq_enable=%d"
@@ -228,27 +263,14 @@ class PAT9125(BaseSensor):
         self.pat9125_stop_update_cmd = self.mcu.lookup_command(
             "command_pat9125_stop_update oid=%c", cq=self.cmd_queue)
         self.pat9125_i2c.build_config()
+
     def _init_stepper(self):
-        # XXX - need to add get_stepper() function to extruder class
-        # and manual stepper class
-        stepper = None
-        obj = self.printer.lookup_object(self.stepper_name, None)
-        if obj is not None and hasattr(obj, "stepper"):
-            stepper = obj.stepper
-        else:
-            # parent is not a printer object (ie extruder or manual stepper)
-            # check the toolhead steppers
-            toolhead = self.printer.lookup_object('toolhead')
-            stepper_list = toolhead.get_kinematics().get_steppers()
-            for s in stepper_list:
-                if self.stepper_name == s.get_name():
-                    stepper = s
-        if stepper is None:
-            # XXX - should probably raise a different error here
-            raise self.gcode.error(
-                "pat9125: Unable to locate stepper [%s]" % (self.stepper_name))
-        else:
-            self.set_stepper(stepper)
+        force_move = self.printer.lookup_object('force_move')
+        stepper = force_move.lookup_stepper(self.stepper_name)
+        self.e_step_dist = stepper.get_step_dist()
+        self.stepper_oid = stepper.get_oid()
+        self.tracker.set_runout_limits(self.e_step_dist)
+
     def _pat9125_init(self):
         mcu = self.mcu
         self.initialized = False
@@ -303,6 +325,7 @@ class PAT9125(BaseSensor):
             self._handle_pat9125_update, "pat9125_update_response", self.oid)
 
         logging.debug("pat9125: Initialization Success")
+
     def _handle_pat9125_update(self, params):
         if params['flags'] & 0x01 == 0:
             # No ack / comms error
@@ -317,13 +340,14 @@ class PAT9125(BaseSensor):
         self.reactor.register_async_callback(
             (lambda e, s=self, p=dict(self.pat9125_state):
                 s.tracker.update(e, p)))
+
     def _handle_comms_error(self):
         self.initialized = False
         self.detect_enabled = False
-        self.insert_enabled = False
-        self.runout_enabled = False
+        self.runout_helper.sensor_enabled = False
         logging.info(
             "pat9125: Communication Error encountered, monitoring stopped")
+
     def _pat9125_parse_status(self, data, motion):
         self.pat9125_state['MOTION'] = motion
         if motion:
@@ -341,6 +365,7 @@ class PAT9125(BaseSensor):
         if self.oq_enable:
             self.pat9125_state['SHUTTER'] = data[3]
             self.pat9125_state['FRAME'] = data[4]
+
     def _check_product_id(self):
         pid = self.pat9125_i2c.read_register('PID1', 2)
         if ((pid[1] << 8) | pid[0]) != PAT9125_PRODUCT_ID:
@@ -349,11 +374,7 @@ class PAT9125(BaseSensor):
                 % (PAT9125_PRODUCT_ID, ((pid[1] << 8) | pid[0])))
             return False
         return True
-    def set_stepper(self, stepper):
-        # XXX - need to add get_oid to stepper class
-        self.e_step_dist = stepper.get_step_dist()
-        self.stepper_oid = stepper.get_oid()
-        self.tracker.set_runout_limits(self.e_step_dist)
+
     def set_mode(self, new_mode):
         if (self.sensor_mode == DetectMode[new_mode] or
                 not self.initialized):
@@ -382,11 +403,14 @@ class PAT9125(BaseSensor):
         logging.debug(
             "pat9125: Polling activated, sampling every %.4f ms"
             % (refresh_time))
+
     def get_state(self):
         return dict(self.pat9125_state)
+
     def set_enable(self, runout, insert):
-        super(PAT9125, self).set_enable(runout, insert)
         if self.detect_enabled:
+            self.runout_enabled = runout
+            self.insert_enabled = insert
             if runout or insert:
                 mode = "INSERT" if insert else "RUNOUT"
             else:
@@ -394,7 +418,10 @@ class PAT9125(BaseSensor):
             self.set_mode(mode)
         else:
             self.runout_enabled = self.insert_enabled = False
-    def cmd_QUERY_FILAMENT_SENSOR(self, params):
+            self.runout_helper.sensor_enabled = False
+
+    cmd_QUERY_PAT9125_help = "Query PAT9125 motion sensor data"
+    def cmd_QUERY_PAT9125(self, params):
         state = self.get_state()
         if state['MOTION']:
             msg = "pat9125 sensor: Motion Detected"
@@ -407,8 +434,6 @@ class PAT9125(BaseSensor):
             msg += "\nAverage Brightness: %d Laser Shutter Time: %d" % (
                 state['FRAME'], state['SHUTTER'])
         self.gcode.respond_info(msg)
-    def cmd_SET_FILAMENT_SENSOR(self, params):
-        self.sensor_enabled = self.gcode.get_int("ENABLE", params, 1)
 
 
 XYE_KEYS = ['X_POS', 'Y_POS', 'STEPPER_POS']
@@ -418,11 +443,10 @@ class MotionTracker:
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.pat9125 = pat9125
+        self.runout_helper = pat9125.runout_helper
         self.oq_enable = pat9125.oq_enable
         self.orientation = pat9125.orientation
-        self.event_delay = config.getfloat('event_delay', 3., above=0.)
         self.need_xye_init = True
-        self.last_event_time = 0.
         self.last_xye = [0, 0, 0]
         self.oq_deque = collections.deque(maxlen=20)
 
@@ -437,7 +461,6 @@ class MotionTracker:
         self.ro_blind_errors = 0
         self.ro_prev_d = 0
         self.ro_blind_steps = 0
-
         self.max_blind_steps = 0
         self.min_error_steps = 0
 
@@ -448,20 +471,27 @@ class MotionTracker:
             'max_insert_sum', 20, minval=1)
         self.ins_sum = 0
         self.ins_change_counter = 0
+
     def _log_oq_results(self):
         if self.oq_enable:
             logging.debug(
                 "pat9125: Last 20 OQ results (shutter, frame) %s" %
                 str(list(self.oq_deque)))
+
     def set_runout_limits(self, step_distance):
         self.max_blind_steps = int(self.max_blind_movement / step_distance + .5)
         self.min_error_steps = int(
             self.blind_error_distance / step_distance + .5)
+
     def reset(self):
         self.need_xye_init = True
+        self.clear_state()
+
+    def clear_state(self):
         self.ro_total_errors = self.ro_blind_errors = 0
         self.ro_blind_steps = self.ro_prev_d = 0
         self.ins_sum = self.ins_change_counter = 0
+
     def update(self, eventtime, state):
         curpos = [state[key] for key in XYE_KEYS]
         delta = [curpos[i] - self.last_xye[i] for i in range(3)]
@@ -471,21 +501,22 @@ class MotionTracker:
             self.need_xye_init = False
             return
 
-        if not self.pat9125.sensor_enabled:
+        if not self.runout_helper.sensor_enabled or \
+                eventtime < self.runout_helper.min_event_systime:
+            self.clear_state()
             return
 
+        # We need to force toggle the runout_helper in order to
+        # ensure that it correctly executes inserts/runouts
         if self.pat9125.runout_enabled:
-            if eventtime - self.last_event_time < self.event_delay:
-                return
             if self.check_runout(delta[self.orientation], delta[2]):
-                self.last_event_time = eventtime
-                self._log_oq_results()
+                self.runout_helper.filament_present = True
+                self.runout_helper.note_filament_present(False)
         elif self.pat9125.insert_enabled:
-            if eventtime - self.last_event_time < self.event_delay:
-                return
             if self.check_insert(delta[self.orientation]):
-                self.last_event_time = eventtime
-                self._log_oq_results()
+                self.runout_helper.filament_present = False
+                self.runout_helper.note_filament_present(True)
+
     def check_runout(self, axis_d, stepper_d):
         if stepper_d > 0:
             # extruder is moving in the positive direction
@@ -511,8 +542,8 @@ class MotionTracker:
                 # No movement detected, we are stepping blind.
                 self.ro_blind_steps += stepper_d
                 cur_err = self.ro_blind_steps / (self.ro_blind_errors + 1)
-                if ((self.ro_prev_d <= 0 or self.ro_total_errors) and
-                        cur_err > self.min_error_steps):
+                if (self.ro_prev_d <= 0 or self.ro_total_errors) and \
+                        cur_err > self.min_error_steps:
                     self.ro_total_errors += 1
                     self.ro_blind_errors += 1
 
@@ -522,16 +553,17 @@ class MotionTracker:
         # time adjusts to a lower number if the object being tracked
         # contrasts with the background.  The empty shutter value
         # would need to be calibrated
-        if (self.ro_total_errors > self.max_runout_errors or
-                self.ro_blind_steps > self.max_blind_steps):
+        if self.ro_total_errors > self.max_runout_errors or \
+                self.ro_blind_steps > self.max_blind_steps:
             logging.info(
                 "pat9125: Runout Detected - Error Count: %d Blind Steps: %d" %
                 (self.ro_total_errors, self.ro_blind_steps))
             self.ro_total_errors = self.ro_blind_errors = 0
             self.ro_blind_steps = self.ro_prev_d = 0
-            self.reactor.register_callback(self.pat9125._runout_event_handler)
+            self._log_oq_results()
             return True
         return False
+
     def check_insert(self, axis_d):
         if axis_d != 0:
             if axis_d > 0:
@@ -545,11 +577,11 @@ class MotionTracker:
         if not self.ins_change_counter:
             self.ins_sum = 0
 
-        if (self.ins_change_counter >= self.max_insert_counter and
-                self.ins_sum > self.max_insert_sum):
+        if self.ins_change_counter >= self.max_insert_counter and \
+                self.ins_sum > self.max_insert_sum:
             logging.info("pat9125: Insert detected")
             self.ins_sum = self.ins_change_counter = 0
-            self.reactor.register_callback(self.pat9125._insert_event_handler)
+            self._log_oq_results()
             return True
         return False
 
