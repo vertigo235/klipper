@@ -184,9 +184,11 @@ class TMCCommandHelper:
 
 # Helper class for "sensorless homing"
 class TMCVirtualPinHelper:
-    def __init__(self, config, mcu_tmc, diag_pin):
+    def __init__(self, config, mcu_tmc, diag_pin, cur_helper=None):
         self.printer = config.get_printer()
         self.mcu_tmc = mcu_tmc
+        self.cur_helper = cur_helper
+        self.rc = self.hc = 0
         self.fields = mcu_tmc.get_fields()
         self.diag_pin = diag_pin
         self.mcu_endstop = None
@@ -225,14 +227,20 @@ class TMCVirtualPinHelper:
         reg = self.fields.lookup_register("en_pwm_mode", None)
         if reg is None:
             # On "stallguard4" drivers, "stealthchop" must be enabled
+            self.en_pwm = not self.fields.get_field("en_spreadCycle")
+            self.pwmthrs = self.fields.get_field("TPWMTHRS")
             self.mcu_tmc.set_register("TPWMTHRS", 0)
             val = self.fields.set_field("en_spreadCycle", 0)
         else:
             # On earlier drivers, "stealthchop" must be disabled
+            self.en_pwm = self.fields.get_field("en_pwm_mode")
             self.fields.set_field("en_pwm_mode", 0)
             val = self.fields.set_field("diag1_stall", 1)
         self.mcu_tmc.set_register("GCONF", val)
         self.mcu_tmc.set_register("TCOOLTHRS", 0xfffff)
+        if self.cur_helper is not None:
+            self.rc, self.hc, home_c = self.cur_helper.get_current()
+            self.cur_helper.set_current(home_c, home_c)
     def handle_homing_move_end(self, endstops):
         if self.mcu_endstop not in endstops:
             return
@@ -245,6 +253,8 @@ class TMCVirtualPinHelper:
             val = self.fields.set_field("diag1_stall", 0)
         self.mcu_tmc.set_register("GCONF", val)
         self.mcu_tmc.set_register("TCOOLTHRS", 0)
+        if self.cur_helper is not None:
+            self.cur_helper.set_current(self.rc, self.hc)
 
 
 ######################################################################
@@ -276,13 +286,16 @@ class TMCMicrostepHelper:
 def TMCStealthchopHelper(config, mcu_tmc, tmc_freq):
     fields = mcu_tmc.get_fields()
     en_pwm_mode = False
-    velocity = config.getfloat('stealthchop_threshold', 0., minval=0.)
-    if velocity:
-        stepper_name = " ".join(config.get_name().split()[1:])
-        stepper_config = config.getsection(stepper_name)
-        step_dist = stepper_config.getfloat('step_distance')
-        step_dist_256 = step_dist / (1 << fields.get_field("MRES"))
-        threshold = int(tmc_freq * step_dist_256 / velocity + .5)
+    velocity = config.getfloat('stealthchop_threshold', None, minval=0.)
+    if velocity is not None:
+        if velocity:
+            stepper_name = " ".join(config.get_name().split()[1:])
+            stepper_config = config.getsection(stepper_name)
+            step_dist = stepper_config.getfloat('step_distance')
+            step_dist_256 = step_dist / (1 << fields.get_field("MRES"))
+            threshold = int(tmc_freq * step_dist_256 / velocity + .5)
+        else:
+            threshold = 0
         fields.set_field("TPWMTHRS", max(0, min(0xfffff, threshold)))
         en_pwm_mode = True
     reg = fields.lookup_register("en_pwm_mode", None)
