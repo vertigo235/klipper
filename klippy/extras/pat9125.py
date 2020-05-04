@@ -56,7 +56,7 @@ class PAT9125_I2C:
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.i2c = bus.MCU_I2C_from_config(
-            config, default_addr=CHIP_ADDR, default_speed=400000)
+            config, default_addr=CHIP_ADDR, default_speed=100000)
         self.mcu = self.i2c.get_mcu()
 
         self.oid = self.mcu.create_oid()
@@ -170,7 +170,7 @@ class PAT9125:
         self.i2c_oid = self.pat9125_i2c.get_i2c_oid()
         self.printer.register_event_handler("klippy:ready", self._handle_ready)
         self.printer.register_event_handler(
-            "klippy:disconnect", self._handle_disconnect)
+            "gcode:request_restart", self._handle_restart)
 
         self.stepper_name = config.get("stepper", "extruder").lower()
         if not config.has_section(self.stepper_name):
@@ -243,7 +243,7 @@ class PAT9125:
         if self.insert_enabled:
             self.set_mode("INSERT")
 
-    def _handle_disconnect(self):
+    def _handle_restart(self, eventtime):
         # stop the pat9125 mcu timer
         self.detect_enabled = False
         self.runout_helper.sensor_enabled = False
@@ -288,7 +288,7 @@ class PAT9125:
         print_time = mcu.estimated_print_time(self.reactor.monotonic())
         minclock = mcu.print_time_to_clock(print_time + .001)
         self.pat9125_i2c.write_register('CONFIG', 0x97, minclock=minclock)
-        minclock = mcu.print_time_to_clock(print_time + .002)
+        minclock = mcu.print_time_to_clock(print_time + .005)
         self.pat9125_i2c.write_register('CONFIG', 0x17, minclock=minclock)
 
         if not (self.pat9125_i2c.write_verify_sequence(PAT9125_INIT1)):
