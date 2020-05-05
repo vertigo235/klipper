@@ -44,18 +44,18 @@ class TRAMZ:
                     'endstop', 'tmc2130_stepper_z:virtual_endstop')
                 self.tmc_z_endstop = (es, "tmc2130_z_endstop")
     cmd_TRAM_Z_help = "Rams Z-axis to top z-holders, used to align Axis"
-    def cmd_TRAM_Z(self, params):
+    def cmd_TRAM_Z(self, gcmd):
         if not self.enabled:
-            self.gcode.respond_info("TRAM_Z setup unsuccessful, aborting")
+            gcmd.respond_info("TRAM_Z setup unsuccessful, aborting")
             return
         reactor = self.printer.get_reactor()
         toolhead = self.printer.lookup_object('toolhead')
         z_tmc2130 = self.printer.lookup_object('tmc2130 stepper_z')
-        rc, hc, hold = z_tmc2130.get_current()
+        rc, hc, homing_cur = z_tmc2130.get_current()
         event_time = reactor.monotonic()
         status = toolhead.get_status(event_time)
         if status['status'] == "Printing":
-            self.gcode.respond_info("Cannot Tram during a print, aborting")
+            gcmd.respond_info("Cannot Tram during a print, aborting")
             return
         if self.tmc_z_endstop is None:
             # TODO: Already Using TMC to home.  Just homing max, home
@@ -75,7 +75,7 @@ class TRAMZ:
             home.homing_move(move_pos, [self.tmc_z_endstop], speed)
         except homing.EndstopError as e:
             reason = str(e)
-            raise self.gcode.error(reason)
+            raise gcmd.error(reason)
         toolhead.wait_moves()
         if self.tram_current is not None:
             z_tmc2130.set_current(self.tram_current, hc)
