@@ -416,14 +416,13 @@ class TMC2130_EXTRA:
             logging.info(success_msg)
             return success_msg
     cmd_TMC_SET_STEALTH_help = "Toggle stealtchop mode"
-    def cmd_TMC_SET_STEALTH(self, params):
-        gcode = self.printer.lookup_object('gcode')
-        enable = gcode.get_str('ENABLE', params, None)
-        vel = gcode.get_int('THRESHOLD', params, None)
+    def cmd_TMC_SET_STEALTH(self, gcmd):
+        enable = gcmd.get('ENABLE', None)
+        vel = gcmd.get_int('THRESHOLD', None)
         if enable is not None:
             enable = enable.upper()
             if enable not in ["TRUE", "FALSE"]:
-                gcode.respond_info("Unknown value for ENABLE, aborting")
+                gcmd.respond_info("Unknown value for ENABLE, aborting")
                 return
             en = (enable == "TRUE")
             self.fields.set_field("en_pwm_mode", en)
@@ -433,12 +432,11 @@ class TMC2130_EXTRA:
             self.fields.set_field("TPWMTHRS", sc_thrs)
             self.set_register("TPWMTHRS", self.fields.get_field("TPWMTHRS"))
     cmd_TMC_SET_PWMCONF_help = "Set stealthchop pwm configuration"
-    def cmd_TMC_SET_PWMCONF(self, params):
-        gcode = self.printer.lookup_object('gcode')
-        ampl = gcode.get_int('AMPL', params, None, minval=0, maxval=255)
-        grad = gcode.get_int('GRAD', params, None, minval=0, maxval=255)
-        freq = gcode.get_int('FREQ', params, None, minval=0, maxval=3)
-        auto = gcode.get('AUTOSCALE', params, None)
+    def cmd_TMC_SET_PWMCONF(self, gcmd):
+        ampl = gcmd.get_int('AMPL', None, minval=0, maxval=255)
+        grad = gcmd.get_int('GRAD', None, minval=0, maxval=255)
+        freq = gcmd.get_int('FREQ', None, minval=0, maxval=3)
+        auto = gcmd.get('AUTOSCALE', None)
         if ampl is not None:
             self.fields.set_field("PWM_AMPL", ampl)
         if grad is not None:
@@ -447,37 +445,35 @@ class TMC2130_EXTRA:
             self.fields.set_field("pwm_freq", freq)
         if auto is not None:
             if auto.upper() not in ["TRUE", "FALSE"]:
-                gcode.respond_info(
+                gcmd.respond_info(
                     "AUTOSCALE must be True or False.")
                 return
             pwm_scale = (auto.upper() == "TRUE")
             self.fields.set_field("pwm_autoscale", pwm_scale)
         self.set_register("PWMCONF", self.regs["PWMCONF"])
     cmd_TMC_SET_WAVE_help = "Set wave correction factor for TMC2130 driver"
-    def cmd_TMC_SET_WAVE(self, params):
-        gcode = self.printer.lookup_object('gcode')
-        is_default = gcode.get_str('SET_DEFAULT', params, "False").upper()
+    def cmd_TMC_SET_WAVE(self, gcmd):
+        is_default = gcmd.get('SET_DEFAULT', "False").upper()
         if is_default == "TRUE":
             msg = self._set_wave(0., True)
         else:
-            msg = self._set_wave(gcode.get_float('FACTOR', params))
-        gcode.respond_info(msg)
+            msg = self._set_wave(gcmd.get_float('FACTOR'))
+        gcmd.respond_info(msg)
     cmd_TMC_SET_STEP_help = "Force a stepper to a specified step"
-    def cmd_TMC_SET_STEP(self, params):
+    def cmd_TMC_SET_STEP(self, gcmd):
         force_move = self.printer.lookup_object('force_move')
         move_params = {'STEPPER': self.name}
-        gcode = self.printer.lookup_object('gcode')
         if self._stepper is None:
             logging.info(
                 "TMC2130 %s: No stepper assigned, cannot step"
                 % (self.name))
-            gcode.respond_info("Unable to move stepper, unknown stepper ID")
+            gcmd.respond_info("Unable to move stepper, unknown stepper ID")
             return
         elif self._stepper.need_motor_enable:
-            gcode.respond_info("Cannot Move, motors off")
+            gcmd.respond_info("Cannot Move, motors off")
             return
         max_step = 4 * self.get_microsteps()
-        target_step = gcode.get_int('STEP', params, 0, minval=0)
+        target_step = gcmd.get_int('STEP', 0, minval=0)
         target_step &= (max_step - 1)
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.wait_moves()
@@ -505,12 +501,12 @@ class TMC2130_EXTRA:
         # Check MSCNT
         phase = self.get_phase()
         if phase != target_step:
-            gcode.respond_info("Unable to move to correct step")
+            gcmd.respond_info("Unable to move to correct step")
             logging.info(
                 "TMC2130 %s: TMC_SET_STEP Invalid MSCNT: %d, Target: %d" %
                 (self.name, phase, target_step))
         else:
-            gcode.respond_info("Correctly moved to step %d:" % target_step)
+            gcmd.respond_info("Correctly moved to step %d:" % target_step)
 
 ######################################################################
 # TMC2130 printer object
