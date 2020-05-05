@@ -154,7 +154,6 @@ class PAT9125:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
-        self.gcode = self.printer.lookup_object('gcode')
         self.name = config.get_name().split()[-1]
 
         # Set up and patch the runout helper
@@ -224,7 +223,8 @@ class PAT9125:
         self.printer.register_event_handler(
             "idle_timeout:printing", self._handle_printing_state)
 
-        self.gcode.register_mux_command(
+        gcode = self.printer.lookup_object('gcode')
+        gcode.register_mux_command(
             "QUERY_PAT9125", "SENSOR", self.name,
             self.cmd_QUERY_PAT9125,
             desc=self.cmd_QUERY_PAT9125_help,)
@@ -391,7 +391,7 @@ class PAT9125:
         else:
             self.sensor_mode = DetectMode["OFF"]
             # XXX - Probably shouldn't be a gcode error
-            raise self.gcode.error(
+            raise self.printer.error(
                 "pat9125: Unknown mode [%s]" % (new_mode))
 
         # Start PAT9125 read timer
@@ -421,7 +421,7 @@ class PAT9125:
             self.runout_helper.sensor_enabled = False
 
     cmd_QUERY_PAT9125_help = "Query PAT9125 motion sensor data"
-    def cmd_QUERY_PAT9125(self, params):
+    def cmd_QUERY_PAT9125(self, gcmd):
         state = self.get_state()
         if state['MOTION']:
             msg = "pat9125 sensor: Motion Detected"
@@ -433,7 +433,7 @@ class PAT9125:
         if self.oq_enable:
             msg += "\nAverage Brightness: %d Laser Shutter Time: %d" % (
                 state['FRAME'], state['SHUTTER'])
-        self.gcode.respond_info(msg)
+        gcmd.respond_info(msg)
 
 
 XYE_KEYS = ['X_POS', 'Y_POS', 'STEPPER_POS']
