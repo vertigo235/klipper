@@ -22,7 +22,6 @@ class ProbeTemp:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.gcode = self.printer.lookup_object('gcode')
-        self.display = None
         self.cal_helper = ProbeCalibrationHelper(config, self)
         self.sensor_type = config.get('sensor_type', None)
         if self.sensor_type is None:
@@ -144,15 +143,15 @@ class ProbeTemp:
         b_status = bed.get_status(eventtime)
         return e_status['target'] > 0., b_status['target'] > 0.
     cmd_GET_PROBE_TEMP_help = "Return the probe temperature"
-    def cmd_GET_PROBE_TEMP(self, params):
-        self.gcode.respond_info(
+    def cmd_GET_PROBE_TEMP(self, gcmd):
+        gcmd.respond_info(
             "Probe Temperature: %.2f/%.2f" % (self.get_temp(0)))
     cmd_PROBE_WAIT_help = "Pause until the probe reaches a temperature"
-    def cmd_PROBE_WAIT(self, params):
+    def cmd_PROBE_WAIT(self, gcmd):
         extr_on, bed_on = self._get_heater_status()
-        wait_temp = self.gcode.get_float(
-            'TEMP', params, 35., minval=20., maxval=70.)
-        timeout = self.gcode.get_int('TIMEOUT', params, 0, minval=0)
+        wait_temp = gcmd.get_float(
+            'TEMP', 35., minval=20., maxval=70.)
+        timeout = gcmd.get_int('TIMEOUT', 0, minval=0)
         self.target = wait_temp
         # direction = self.gcode.get_str('DIRECTION', params, 'up').lower()
         probe_cooling = not extr_on and not bed_on
@@ -169,7 +168,7 @@ class ProbeTemp:
             self.gcode.respond_info("Wait for Pinda Temp Timed Out")
         self.target = 0.
     cmd_APPLY_TEMP_OFFSET_help = "Apply a gcode offset based on the probe's temperature"
-    def cmd_APPLY_TEMP_OFFSET(self, params):
+    def cmd_APPLY_TEMP_OFFSET(self, gcmd):
         self.set_z_adjustment()
 
 
@@ -178,7 +177,6 @@ class ProbeCalibrationHelper:
         self.sensor = probetemp
         self.printer = self.sensor.printer
         self.gcode = self.sensor.gcode
-        self.display = None
         probe_config = config.getsection('probe')
         self.z_offset = probe_config.getfloat('z_offset')
         self.gcode.register_command(
@@ -187,11 +185,6 @@ class ProbeCalibrationHelper:
     def handle_ready(self):
         self.toolhead = self.printer.lookup_object('toolhead')
         self.kinematics = self.toolhead.get_kinematics()
-        try:
-            self.display = self.printer.lookup_object('display')
-        except:
-            # Display not available.  Its not necessary, only used for feedback
-            self.display = None
     def _next_probe(self):
         self._move_toolhead_z(Z_LIFT)
         self.gcode.run_script_from_command("PROBE")
@@ -208,21 +201,19 @@ class ProbeCalibrationHelper:
     def _start_calibration(self):
         pass
     cmd_CALIBRATE_PROBE_TEMP_help = "Calbrate the probe's offset based on its temperature"
-    def cmd_CALIBRATE_PROBE_TEMP(self, params):
+    def cmd_CALIBRATE_PROBE_TEMP(self, gcmd):
         reactor = self.printer.get_reactor()
-        xstart = self.gcode.get_float('X', params, 97., minval=0., maxval=245.)
-        ystart = self.gcode.get_float('Y', params, 103, minval=0, maxval=210.)
-        max_probe_temp = self.gcode.get_float('TARGET', params, 45., above=25.)
-        bed_temp = self.gcode.get_float('B_TMP', params, 70., minval=0.)
-        extruder_temp = self.gcode.get_float('E_TMP', params, 200., minval=0.)
-        timeout = self.gcode.get_int('TIMEOUT', params, 180, minval=0)
+        xstart = gcmd.get_float('X', 97., minval=0., maxval=245.)
+        ystart = gcmd.get_float('Y', 103, minval=0, maxval=210.)
+        max_probe_temp = gcmd.get_float('TARGET', 45., above=25.)
+        bed_temp = gcmd.get_float('B_TMP', 70., minval=0.)
+        extruder_temp = gcmd.get_float('E_TMP', 200., minval=0.)
+        timeout = gcmd.get_int('TIMEOUT', 180, minval=0)
         if extruder_temp < 170.0:
             extruder_temp = None
         z_pos = 0.
         probe_array = []
-        self.gcode.respond_info("Starting Probe Temperature Calibration...")
-        if self.display:
-            self.display.set_message("PINDA Cal Start...")
+        gcmd.respond_info("Starting Probe Temperature Calibration...")
         self.gcode.run_script_from_command("M190 S%.2f" % (bed_temp))
         if extruder_temp:
             self.gcode.run_script_from_command("M109 S%.2f" % (extruder_temp))
@@ -239,19 +230,14 @@ class ProbeCalibrationHelper:
             probe_array.append(
                 (current_temp, z_pos - self.z_offset,
                  reactor.monotonic() - start_time))
-            self.gcode.respond_info(
+            gcmd.respond_info(
                 "Probe Temp: %.2f, Z-Position: %.4f" % (current_temp, z_pos))
-            if self.display:
-                self.display.set_message(
-                    "P: %.2f, Z: %.2f" % (current_temp, z_pos), 5.)
             # Lower Head to absorb maximum heat
             self._move_toolhead_z(.2)
             keep_alive = self.sensor.pause_for_temp(
                 min(current_temp + .5, max_probe_temp), timeout=timeout)
             current_temp = self.sensor.get_temp(0)[0]
-        self.gcode.respond_info("Probe Calibration Complete!")
-        if self.display:
-            self.display.set_message("PINDA Cal Done!", 10.)
+        gcmd.respond_info("Probe Calibration Complete!")
         # turn off temps, raise Z
         self.gcode.run_script_from_command("M104 S0")
         self.gcode.run_script_from_command("M140 S0")
@@ -262,7 +248,7 @@ class ProbeCalibrationHelper:
             f = open(HOME_DIR + "/PindaTemps.json", "wb")
         except:
             f = None
-            self.gcode.respond_info(
+            gcmd.respond_info(
                 "Unable to open file to dump json serialized dict")
         if f:
             out_dict = {
