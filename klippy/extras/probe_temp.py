@@ -48,14 +48,15 @@ class ProbeTemp:
         self.target = 0.
         self.offset_applied = 0.
         if config.has_section("thermistor " + self.sensor_type):
-            self.printer.try_load_module(
+            self.printer.load_object(
                 config, "thermistor " + self.sensor_type)
-        self.sensor = self.printer.lookup_object('heater').setup_sensor(config)
+        pheaters = self.printer.load_object(config, 'heaters')
+        self.sensor = pheaters.setup_sensor(config)
         mintemp = config.getfloat('min_temp', 0.)
         maxtemp = config.getfloat('max_temp', 100.)
         self.sensor.setup_minmax(mintemp, maxtemp)
         self.sensor.setup_callback(self.temperature_callback)
-        self.printer.lookup_object('heater').register_sensor(config, self, "P")
+        pheaters.register_sensor(config, self, "P")
         self.printer.register_event_handler("klippy:ready",
                                             self.handle_ready)
         self.gcode.register_command(
