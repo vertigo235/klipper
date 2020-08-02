@@ -38,6 +38,8 @@ communication with the Klipper developers.
   sensorless homing.
 - [Skew correction](skew_correction.md): Adjustments for axes not
   perfectly square.
+- [Resonance compensation](Resonance_Compensation.md): Reduce ringing in prints
+  by measuring printer resonances and configuring the input shaping.
 - [G-Codes](G-Codes.md): Information on commands supported by Klipper.
 
 # Developer Documentation
@@ -60,10 +62,12 @@ communication with the Klipper developers.
 
 # Device Specific Documents
 
-- [Bootloaders](Bootloaders.md): Developer information on
-  micro-controller flashing.
+- [Raspberry Pi as Micro-controller](RPi_microcontroller.md): Details
+  for controlling devices wired to the GPIO pins of a Raspberry Pi.
 - [Beaglebone](beaglebone.md): Details for running Klipper on the
   Beaglebone PRU.
+- [Bootloaders](Bootloaders.md): Developer information on
+  micro-controller flashing.
 - [stm32f0](stm32f0_CAN.md): Information on the STM32F0 micro-controller
   port.
 - [TSL1401CL filament width sensor](TSL1401CL_Filament_Width_Sensor.md)

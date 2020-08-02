@@ -337,6 +337,7 @@ class ToolHead:
         self.move_queue.set_flush_time(self.buffer_time_high)
         self.idle_flush_print_time = 0.
         flush_time = self.last_kin_move_time + self.kin_flush_delay
+        flush_time = max(flush_time, self.print_time - self.kin_flush_delay)
         self.last_kin_flush_time = max(self.last_kin_flush_time, flush_time)
         self._update_move_time(max(self.print_time, self.last_kin_flush_time))
     def _flush_lookahead(self):
@@ -494,7 +495,11 @@ class ToolHead:
                      'estimated_print_time': estimated_print_time,
                      'extruder': self.extruder.get_name(),
                      'position': homing.Coord(*self.commanded_pos),
-                     'printing_time': print_time - last_print_start_time })
+                     'printing_time': print_time - last_print_start_time,
+                     'max_velocity': self.max_velocity,
+                     'max_accel': self.max_accel,
+                     'max_accel_to_decel': self.requested_accel_to_decel,
+                     'square_corner_velocity': self.square_corner_velocity})
         return res
     def _handle_shutdown(self):
         self.can_pause = False
